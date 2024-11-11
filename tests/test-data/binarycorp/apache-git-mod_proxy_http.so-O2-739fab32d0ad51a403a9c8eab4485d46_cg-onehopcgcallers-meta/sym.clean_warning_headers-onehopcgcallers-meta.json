@@ -1,0 +1,1 @@
+{"adjacency":[[]],"directed":"True","graph":[],"multigraph":false,"nodes":[{"id":0,"funcName":"sym.clean_warning_headers","functionFeatureSubset":{"name":"sym.clean_warning_headers","ninstrs":81,"edges":18,"indegree":0,"outdegree":7,"nlocals":6,"nargs":5,"signature":"sym.clean_warning_headers (int64_t arg1, int64_t arg2, int64_t arg3, int64_t arg_88h, int64_t arg_a0h);"}}]}
