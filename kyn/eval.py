@@ -521,27 +521,3 @@ if __name__ == "__main__":
 
     # Run evaluation
     results = evaluator.evaluate()
-
-"""
-if __name__ == "__main__":
-
-    MODEL_PATH = "/mnt/9d58c266-2eda-42a5-bee0-f140e2ccefad/FASERplusplus/paper-artefacts/models/best-model/8c913a81.ep350"
-    model = GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge(256, 6)
-    model_dict = torch.load(MODEL_PATH)
-    model.load_state_dict(model_dict)
-    model.eval()
-    model.to("cuda")
-
-    for (dataset_path, dataset_prefix) in [
-                                           #("datasets/test/cisco-d1-test-callers-edge-between", "cisco-d1-test"),
-                                           ("datasets/test/cisco-d2-test-callers-edge-between", "cisco-d2-test"),
-                                           ("datasets/test/binkit-no-inline-test-callers-edge-between", "binkit-no-inline"),
-                                           ("datasets/test/binkit-normal-test-callers-edge-between", "binkit-normal"),
-                                           ("datasets/test/binarycorp-3m-test-with-dups", "binarycorp-3m-test-with-dups"),
-                                           ("datasets/test/binarycorp-3m-test", "binarycorp-3m-test")
-                                         ]:
-
-        evaluator = KYNEvaluator(model, "best-cross", dataset_path, dataset_prefix, search_pool_size=[100, 250, 1000], num_search_pools=500)
-        evaluator.evaluate()
-        
-"""

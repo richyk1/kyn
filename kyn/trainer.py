@@ -15,8 +15,6 @@ import torch
 from tqdm import tqdm
 from statistics import mean
 
-from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
-
 
 class KYNTrainer:
     def __init__(
@@ -124,15 +122,3 @@ class KYNTrainer:
         torch.save(
             self.model.state_dict(), f"{self.config.exp_uuid}.ep{self.config.epochs}"
         )
-
-
-if __name__ == "__main__":
-    config = KYNConfig(
-        train_data="../datasets/dummy/binkit-test-new-class-small-graphs.pickle",
-        train_labels="../datasets/dummy/binkit-test-new-class-small-labels.pickle",
-    )
-    model = GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge(
-        config.model_channels, in_channels=6
-    )
-    trainer = KYNTrainer(model, config, "cuda")
-    trainer.train()
