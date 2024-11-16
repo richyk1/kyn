@@ -137,6 +137,11 @@ class KYNDataset:
                     bb = nx.edge_betweenness_centrality(G, normalized=False)
                     nx.set_edge_attributes(G, bb, "weight")
 
+                # Generate an integer label based on the index of the binary_function_id
+                label = self._generate_graph_label(G, binary_function_id)
+                G.graph["label"] = label
+                self.labels.append(label)
+
                 # Add function name to the graph metadata
                 G.graph["name"] = Path(file_path).name.split("-")[0]
 
