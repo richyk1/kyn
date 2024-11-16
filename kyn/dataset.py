@@ -138,9 +138,7 @@ class KYNDataset:
                     nx.set_edge_attributes(G, bb, "weight")
 
                 # Generate an integer label based on the index of the binary_function_id
-                label = self._generate_graph_label(G, binary_function_id)
-                G.graph["label"] = label
-                self.labels.append(label)
+                self._generate_graph_label(G, binary_function_id)
 
                 # Add function name to the graph metadata
                 G.graph["name"] = Path(file_path).name.split("-")[0]
@@ -239,7 +237,7 @@ class KYNDataset:
             pickle.dump(self.labels, fp)
             fp.close()
 
-    def _generate_graph_label(self, G: nx.DiGraph, binary_function_id: str) -> int:
+    def _generate_graph_label(self, G: nx.DiGraph, binary_function_id: str):
         """
         Generate the label for a function call graphlet
 
@@ -250,5 +248,3 @@ class KYNDataset:
         label = self.binary_func_id_index.index(binary_function_id)
         G.graph["label"] = label
         self.labels.append(label)
-
-        return label
