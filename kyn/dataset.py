@@ -9,6 +9,8 @@ import torch
 from rustworkx import PyDiGraph
 from torch_geometric.utils import from_rustworkx
 from tqdm import tqdm
+from torch_geometric.data import Data
+import torch
 
 from loguru import logger
 
@@ -116,6 +118,56 @@ class KYNDataset:
                 if any(filter_str in filepath for filter_str in self.filter_strs)
             ]
 
+    def from_rustworkx(G: rx.PyDiGraph):
+        r"""Converts a :obj:`rustworkx.PyDiGraph` to a :class:`torch_geometric.data.Data` instance.
+
+        Args:
+            G (rustworkx.PyDiGraph): A rustworkx directed graph.
+        """
+        # Ensure nodes are labeled with integers (rustworkx already uses integer indices)
+        node_map = {node: i for i, node in enumerate(G.nodes())}
+
+        # Extract edge indices
+        edge_index = []
+        for edge in G.edge_indices():
+            source, target = G.edge_endpoints(edge)
+            edge_index.append([node_map[source], node_map[target]])
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+
+        # Extract node features
+        data = {}
+        for i, node in enumerate(G.nodes()):
+            for key, value in node.items():
+                if isinstance(value, (int, float, list)):
+                    if str(key) not in data:
+                        data[str(key)] = []
+                    data[str(key)].append(value)
+
+        # Extract edge features
+        for i, edge in enumerate(G.edge_indices()):
+            edge_data = G.get_edge_data(edge)
+            for key, value in edge_data.items():
+                if isinstance(value, (int, float, list)):
+                    if str(key) not in data:
+                        data[str(key)] = []
+                    data[str(key)].append(value)
+
+        # Convert lists to tensors
+        for key, item in data.items():
+            try:
+                data[key] = torch.tensor(item)
+            except ValueError:
+                pass
+
+        # Add edge index to the data dictionary
+        data["edge_index"] = edge_index.view(2, -1)
+
+        # Create a PyTorch Geometric Data object
+        data = Data.from_dict(data)
+        data.num_nodes = G.num_nodes()
+
+        return data
+
     def load_and_transform_graphs(self):
         for file_path in tqdm(self.file_paths):
             binary_function_id = self.get_binary_func_id(file_path)
@@ -150,33 +202,10 @@ class KYNDataset:
                 # Add function name to the graph metadata
                 G.graph["name"] = Path(file_path).name.split("-")[0]
 
-                if self.with_edge_features:
-                    pyg = from_rustworkx(
-                        G,
-                        node_attrs=[
-                            "ninstrs",
-                            "edges",
-                            "indegree",
-                            "outdegree",
-                            "nlocals",
-                            "nargs",
-                        ],
-                        edge_attrs=["weight"],
-                    )
-                else:
-                    pyg = from_rustworkx(
-                        G,
-                        node_attrs=[
-                            "ninstrs",
-                            "edges",
-                            "indegree",
-                            "outdegree",
-                            "nlocals",
-                            "nargs",
-                        ],
-                    )
-                pyg.x = pyg.x.to(torch.float32)
-                # drop processed graphs with no edges
+                # Convert rustworkx graph to PyTorch Geometric Data object
+                pyg = from_rustworkx(G)
+
+                # Drop processed graphs with no edges
                 pyg.validate()
                 self.graphs.append(pyg)
 
