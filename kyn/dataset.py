@@ -4,10 +4,10 @@ import pickle
 import random
 from pathlib import Path
 
-import networkx as nx
+import rustworkx as rx
 import torch
-from networkx.readwrite import json_graph
-from torch_geometric.utils import from_networkx
+from rustworkx import PyDiGraph
+from torch_geometric.utils import from_rustworkx
 from tqdm import tqdm
 
 from loguru import logger
@@ -57,7 +57,13 @@ class KYNDataset:
             self.dataset_len = len(self.file_paths)
             logger.info(f"Remaining files: {self.dataset_len}")
 
-        if dataset_naming_convetion not in ["cisco", "binkit", "trex", "binarycorp"]:
+        if dataset_naming_convetion not in [
+            "cisco",
+            "binkit",
+            "trex",
+            "binarycorp",
+            "custom",
+        ]:
             raise ValueError(
                 "The dataset naming convetion only has four options - 'cisco', 'binkit', 'trex' or 'binarycorp'"
             )
@@ -125,17 +131,18 @@ class KYNDataset:
                 for node in data["nodes"]:
                     self.clean_graph_nodes(node)
 
-                # Load JSON into a Neworkx DiGraph Object
-                G = json_graph.adjacency_graph(data)
+                # Load JSON into a Rustworkx DiGraph Object
+                G = self._load_json_to_rustworkx(data)
 
-                if len(list(G.edges())) == 0:
+                if G.num_edges() == 0:
                     self.no_graphs_failed += 1
                     continue
 
                 # Add edge-betweenness values to each of the edges if set (True by default)
                 if self.with_edge_features:
-                    bb = nx.edge_betweenness_centrality(G, normalized=False)
-                    nx.set_edge_attributes(G, bb, "weight")
+                    bb = rx.edge_betweenness_centrality(G, normalized=False)
+                    for edge in G.edge_indices():
+                        G.update_edge_by_index(edge, {"weight": bb[edge]})
 
                 # Generate an integer label based on the index of the binary_function_id
                 self._generate_graph_label(G, binary_function_id)
@@ -144,9 +151,9 @@ class KYNDataset:
                 G.graph["name"] = Path(file_path).name.split("-")[0]
 
                 if self.with_edge_features:
-                    pyg = from_networkx(
+                    pyg = from_rustworkx(
                         G,
-                        group_node_attrs=[
+                        node_attrs=[
                             "ninstrs",
                             "edges",
                             "indegree",
@@ -154,12 +161,12 @@ class KYNDataset:
                             "nlocals",
                             "nargs",
                         ],
-                        group_edge_attrs=["weight"],
+                        edge_attrs=["weight"],
                     )
                 else:
-                    pyg = from_networkx(
+                    pyg = from_rustworkx(
                         G,
-                        group_node_attrs=[
+                        node_attrs=[
                             "ninstrs",
                             "edges",
                             "indegree",
@@ -187,6 +194,29 @@ class KYNDataset:
                 f"Processed {self.sample_size} graphs. {self.target_sample_size} were generated after {self.no_graphs_failed} failed from {self.sample_size} processed"
             )
 
+    def _load_json_to_rustworkx(self, data: dict) -> PyDiGraph:
+        """
+        Load a JSON graph representation into a Rustworkx DiGraph.
+
+        :param data: The JSON data representing the graph.
+        :return: A Rustworkx DiGraph object.
+        """
+        G = PyDiGraph()
+        node_indices = {}
+
+        # Add nodes
+        for node in data["nodes"]:
+            node_index = G.add_node(node)
+            node_indices[node["id"]] = node_index
+
+        # Add edges
+        for edge in data["edges"]:
+            source = node_indices[edge["source"]]
+            target = node_indices[edge["target"]]
+            G.add_edge(source, target, {})
+
+        return G
+
     def get_binary_func_id(self, file_path: str) -> str:
         if self.dataset_naming_convetion == "binkit":
             return self.get_binkit_binary_func_id(file_path)
@@ -194,6 +224,8 @@ class KYNDataset:
             return self.get_binarycorp_binary_func_id(file_path)
         elif self.dataset_naming_convetion == "trex":
             return self.get_trex_binary_func_id(file_path)
+        elif self.dataset_naming_convetion == "custom":
+            return self.get_custom_binary_func_id(file_path)
         else:
             return self.get_cisco_talos_binary_func_id(file_path)
 
@@ -221,12 +253,25 @@ class KYNDataset:
             + Path(file_path).name.split("-")[0]
         )
 
+    def get_custom_binary_func_id(self, file_path: str) -> str:
+        return Path(file_path).name.split("_sub")[0]
+
     def clean_graph_nodes(self, node):
-        del node["functionFeatureSubset"]["signature"]
-        del node["functionFeatureSubset"]["name"]
-        for k, v in node["functionFeatureSubset"].items():
-            node[k] = v
-        del node["functionFeatureSubset"]
+        if "functionFeatureSubset" not in node or not isinstance(
+            node["functionFeatureSubset"], dict
+        ):
+            return  # Graceful exit if key is missing or not a dict
+
+        function_features = node.pop(
+            "functionFeatureSubset", {}
+        )  # Safely remove the key
+
+        # Remove specific keys if they exist
+        function_features.pop("signature", None)
+        function_features.pop("name", None)
+
+        # Merge the remaining items back into the node
+        node.update(function_features)
 
     def save_dataset(self, save_prefix: str):
         with open(f"{save_prefix}-graphs.pickle", "wb") as fp:
@@ -237,11 +282,11 @@ class KYNDataset:
             pickle.dump(self.labels, fp)
             fp.close()
 
-    def _generate_graph_label(self, G: nx.DiGraph, binary_function_id: str):
+    def _generate_graph_label(self, G: PyDiGraph, binary_function_id: str):
         """
         Generate the label for a function call graphlet
 
-        :param G: the networkx graph to generate metadata for
+        :param G: the rustworkx graph to generate metadata for
         :param binary_function_id: the binary name + function id string for the graph
         :return: integer label for the graph
         """
