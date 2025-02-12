@@ -1,5 +1,5 @@
 import glob
-import json
+import orjson
 import pickle
 import random
 from pathlib import Path
@@ -7,12 +7,136 @@ from pathlib import Path
 import rustworkx as rx
 import torch
 from rustworkx import PyDiGraph
-from torch_geometric.utils import from_rustworkx
 from tqdm import tqdm
 from torch_geometric.data import Data
-import torch
+from typing import Optional, Union, List, Dict, Any, Literal
+from collections import defaultdict
+
 
 from loguru import logger
+
+
+class GraphWithMetadata:
+    def __init__(self, graph: rx.PyDiGraph, metadata=None):
+        self.graph = graph
+        self.metadata = metadata or {}
+
+    def __getattr__(self, name):
+        return getattr(self.graph, name)
+
+
+def from_rustworkx(
+    graph: GraphWithMetadata,
+    group_node_attrs: Optional[Union[List[str], Literal["all"]]] = None,
+    group_edge_attrs: Optional[Union[List[str], Literal["all"]]] = None,
+) -> Data:
+    # Step 1: Create node index mapping
+    original_nodes = graph.node_indices()
+    index_map = {orig: i for i, orig in enumerate(original_nodes)}
+
+    # Step 2: Initialize data dictionary
+    data_dict: Dict[str, Any] = defaultdict(list)
+
+    # Step 3: Process node attributes
+    node_data = [graph.get_node_data(idx) for idx in original_nodes]
+    node_attrs = []
+    if node_data:
+        if not all(isinstance(d, dict) for d in node_data):
+            raise TypeError("All node data must be dictionaries")
+        node_attrs = list(node_data[0].keys())
+        for data in node_data[1:]:
+            if data.keys() != node_data[0].keys():
+                raise ValueError("Inconsistent node attributes")
+
+        for feat_dict in node_data:
+            for key, value in feat_dict.items():
+                data_dict[key].append(value)
+
+    # Step 4: Process edges and edge attributes
+    edges = graph.edge_list()
+    edge_index = torch.empty((2, len(edges)), dtype=torch.long)
+    if edges:
+        sources, targets = zip(*edges)
+        edge_data = [graph.get_edge_data(s, t) for s, t in edges]
+        mapped_sources = [index_map[s] for s in sources]
+        mapped_targets = [index_map[t] for t in targets]
+        edge_index = torch.tensor([mapped_sources, mapped_targets], dtype=torch.long)
+    data_dict["edge_index"] = edge_index
+
+    edge_attrs = []
+    if edges and edge_data:
+        if not all(isinstance(d, dict) for d in edge_data):
+            raise TypeError("All edge data must be dictionaries")
+        edge_attrs = list(edge_data[0].keys())
+        for data in edge_data[1:]:
+            if data.keys() != edge_data[0].keys():
+                raise ValueError("Inconsistent edge attributes")
+
+        for feat_dict in edge_data:
+            for key, value in feat_dict.items():
+                # Handle attribute name conflicts
+                new_key = f"edge_{key}" if key in node_attrs else key
+                data_dict[new_key].append(value)
+
+    # Step 5: Process graph attributes
+    graph_attrs = getattr(graph, "metadata", {})
+    for key, value in graph_attrs.items():
+        new_key = f"graph_{key}" if key in node_attrs else key
+        data_dict[new_key] = value
+
+    # Step 6: Convert lists to tensors
+    for key, value in data_dict.items():
+        if isinstance(value, list):
+            try:
+                data_dict[key] = torch.tensor(value)
+            except Exception as e:
+                raise ValueError(f"Failed to convert {key} to tensor: {str(e)}")
+
+    # Step 7: Create Data object
+    data = Data.from_dict(data_dict)
+
+    # Step 8: Handle attribute grouping
+    if group_node_attrs == "all":
+        group_node_attrs = node_attrs
+    elif group_node_attrs is None:
+        group_node_attrs = []
+
+    if group_edge_attrs == "all":
+        group_edge_attrs = edge_attrs
+    elif group_edge_attrs is None:
+        group_edge_attrs = []
+
+    # Process node attribute grouping
+    if group_node_attrs:
+        xs = []
+        for key in group_node_attrs:
+            if key not in data:
+                raise KeyError(f"Node attribute {key} not found")
+            x = data[key]
+            x = x.view(-1, 1) if x.dim() <= 1 else x
+            xs.append(x)
+            del data[key]
+        data.x = torch.cat(xs, dim=-1)
+
+    # Process edge attribute grouping
+    if group_edge_attrs:
+        edge_attrs = []
+        for key in group_edge_attrs:
+            # Handle potential renamed edge attributes
+            edge_key = f"edge_{key}" if key in node_attrs else key
+            if edge_key not in data:
+                raise KeyError(f"Edge attribute {key} not found")
+            x = data[edge_key]
+            x = x.view(-1, 1) if x.dim() <= 1 else x
+            edge_attrs.append(x)
+            del data[edge_key]
+        data.edge_attr = torch.cat(edge_attrs, dim=-1)
+
+    # Handle empty node features
+    if data.x is None and data.pos is None:
+        data.num_nodes = len(original_nodes)
+
+    return data
 
 
 class KYNDataset:
@@ -118,56 +242,6 @@ class KYNDataset:
                 if any(filter_str in filepath for filter_str in self.filter_strs)
             ]
 
-    def from_rustworkx(G: rx.PyDiGraph):
-        r"""Converts a :obj:`rustworkx.PyDiGraph` to a :class:`torch_geometric.data.Data` instance.
-
-        Args:
-            G (rustworkx.PyDiGraph): A rustworkx directed graph.
-        """
-        # Ensure nodes are labeled with integers (rustworkx already uses integer indices)
-        node_map = {node: i for i, node in enumerate(G.nodes())}
-
-        # Extract edge indices
-        edge_index = []
-        for edge in G.edge_indices():
-            source, target = G.edge_endpoints(edge)
-            edge_index.append([node_map[source], node_map[target]])
-        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-
-        # Extract node features
-        data = {}
-        for i, node in enumerate(G.nodes()):
-            for key, value in node.items():
-                if isinstance(value, (int, float, list)):
-                    if str(key) not in data:
-                        data[str(key)] = []
-                    data[str(key)].append(value)
-
-        # Extract edge features
-        for i, edge in enumerate(G.edge_indices()):
-            edge_data = G.get_edge_data(edge)
-            for key, value in edge_data.items():
-                if isinstance(value, (int, float, list)):
-                    if str(key) not in data:
-                        data[str(key)] = []
-                    data[str(key)].append(value)
-
-        # Convert lists to tensors
-        for key, item in data.items():
-            try:
-                data[key] = torch.tensor(item)
-            except ValueError:
-                pass
-
-        # Add edge index to the data dictionary
-        data["edge_index"] = edge_index.view(2, -1)
-
-        # Create a PyTorch Geometric Data object
-        data = Data.from_dict(data)
-        data.num_nodes = G.num_nodes()
-
-        return data
-
     def load_and_transform_graphs(self):
         for file_path in tqdm(self.file_paths):
             binary_function_id = self.get_binary_func_id(file_path)
@@ -176,10 +250,12 @@ class KYNDataset:
                 self.binary_func_id_index.append(binary_function_id)
 
             try:
-                # Load the graph into a JSON object
-                data = json.load(open(file_path))
+                # Load the graph into a JSON object using orjson
+                # Read the file in binary mode and parse with orjson
+                with open(file_path, "rb") as f:
+                    data = orjson.loads(f.read())
 
-                # Iterate each node within the JSON to remove un-needed data
+                # Iterate over each node within the JSON to remove un-needed data
                 for node in data["nodes"]:
                     self.clean_graph_nodes(node)
 
@@ -190,27 +266,34 @@ class KYNDataset:
                     self.no_graphs_failed += 1
                     continue
 
-                # Add edge-betweenness values to each of the edges if set (True by default)
+                # Add edge-betweenness values to each of the edges if enabled (True by default)
                 if self.with_edge_features:
                     bb = rx.edge_betweenness_centrality(G, normalized=False)
                     for edge in G.edge_indices():
                         G.update_edge_by_index(edge, {"weight": bb[edge]})
 
+                G = GraphWithMetadata(G)
+
                 # Generate an integer label based on the index of the binary_function_id
                 self._generate_graph_label(G, binary_function_id)
 
                 # Add function name to the graph metadata
-                G.graph["name"] = Path(file_path).name.split("-")[0]
+                G.metadata["name"] = binary_function_id
 
-                # Convert rustworkx graph to PyTorch Geometric Data object
+                # Convert rustworkx graph to a PyTorch Geometric Data object
                 pyg = from_rustworkx(G)
 
-                # Drop processed graphs with no edges
-                pyg.validate()
+                # Validate the graph and append
+                try:
+                    pyg.validate()
+                except:
+                    logger.warning(f"Failed to validate {file_path}")
+
                 self.graphs.append(pyg)
 
             except Exception as e:
                 print(f"Failed to load {file_path} - Exception: {e}")
+                self.no_graphs_failed += 1
 
         if self.target_sample_size is None:
             logger.info(
@@ -242,7 +325,7 @@ class KYNDataset:
         for edge in data["edges"]:
             source = node_indices[edge["source"]]
             target = node_indices[edge["target"]]
-            G.add_edge(source, target, {})
+            G.add_edge(source, target, None)
 
         return G
 
@@ -291,25 +374,19 @@ class KYNDataset:
         ):
             return  # Graceful exit if key is missing or not a dict
 
-        function_features = node.pop(
-            "functionFeatureSubset", {}
-        )  # Safely remove the key
-
+        function_features = node.pop("functionFeatureSubset", {})
         # Remove specific keys if they exist
         function_features.pop("signature", None)
         function_features.pop("name", None)
-
         # Merge the remaining items back into the node
         node.update(function_features)
 
     def save_dataset(self, save_prefix: str):
         with open(f"{save_prefix}-graphs.pickle", "wb") as fp:
             pickle.dump(self.graphs, fp)
-            fp.close()
 
         with open(f"{save_prefix}-labels.pickle", "wb") as fp:
             pickle.dump(self.labels, fp)
-            fp.close()
 
     def _generate_graph_label(self, G: PyDiGraph, binary_function_id: str):
         """
@@ -320,5 +397,5 @@ class KYNDataset:
         :return: integer label for the graph
         """
         label = self.binary_func_id_index.index(binary_function_id)
-        G.graph["label"] = label
+        G.metadata["label"] = label
         self.labels.append(label)

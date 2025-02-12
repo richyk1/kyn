@@ -155,7 +155,7 @@ def main():
     dataset_parser.add_argument(
         "--dataset-type",
         required=True,
-        choices=["cisco", "binkit", "trex", "binarycorp"],
+        choices=["cisco", "binkit", "trex", "binarycorp", "custom"],
         help="Dataset naming convention",
     )
     dataset_parser.add_argument(
