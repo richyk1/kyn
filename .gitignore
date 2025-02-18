@@ -13,3 +13,7 @@ wheels/
 wandb
 *.pickle
 
+
+# Custom
+*.ep*
+results/*

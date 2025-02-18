@@ -14,7 +14,7 @@ from kyn.networks import (
     GraphConvLayerNormGlobalMaxSmallSoftMaxAggrEdge,
 )
 from kyn.config import KYNConfig
-from kyn.eval import KYNEvaluator, KYNVulnEvaluator
+from kyn.eval import KYNEvaluator
 
 
 def get_model(model_name: str, config: KYNConfig) -> torch.nn.Module:
@@ -98,7 +98,7 @@ def evaluate_model(args):
         model=model,
         model_name=args.model_name,
         dataset_path=args.dataset_path,
-        eval_prefix=args.experiment_prefix,
+        eval_prefix=args.eval_prefix,
         search_pool_size=args.search_pool_sizes,
         num_search_pools=args.num_search_pools,
         random_seed=args.random_seed,

@@ -1,3 +1,11 @@
+notes
+```
+python cli.py vuln-evaluate --model-path e3e17252.ep350 --model-name
+
+python cli.py evaluate --model-path e3e17252.ep350 --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --dataset-path eu4 --eval-prefix eu4_eval --requires-edge-feats
+```
+
+
 # Know your neighborhood (KYN)
 
 This repo contains the training and evaluation code for the paper titled "Know Your Neighborhood: General and Zero-Shot Capable Binary Function Search Powered by Call Graphlets".

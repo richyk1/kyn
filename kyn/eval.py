@@ -1,28 +1,27 @@
-import pickle
-from collections import Counter
-import random
-
-from torchmetrics.retrieval import RetrievalMRR, RetrievalRecall, RetrievalNormalizedDCG
-
-from typing import Union
-from kyn.utils import validate_device
-
-
-from pathlib import Path
-from statistics import median, mean
-from typing import List, Tuple, Optional
 import glob
 import json
+import os
+import pickle
+import random
+from collections import Counter
+from pathlib import Path
+from statistics import mean, median
+from typing import List, Optional, Tuple, Union
 
+import orjson
+import rustworkx as rx
 import torch
 import torch.nn as nn
-from torch import cosine_similarity
-import networkx as nx
-from networkx.readwrite import json_graph
-from torch_geometric.utils import from_networkx
-from torch_geometric.data import Data
-from tqdm import tqdm
+from from_rustworkx import from_rustworkx
+from GraphWithMetadata import GraphWithMetadata
+from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
+from kyn.utils import validate_device
 from loguru import logger
+from networkx.readwrite import json_graph
+from torch import cosine_similarity
+from torch_geometric.data import Data
+from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG, RetrievalRecall
+from tqdm import tqdm
 
 
 class KYNEvaluator:
@@ -128,11 +127,11 @@ class KYNEvaluator:
             with torch.inference_mode():
                 a.to(self.device)
                 b.to(self.device)
-                al = a.label.item()
+                al = a.label
                 a.x = a.x.to(torch.float32)
                 a_e = self._gen_embedding(a)
 
-                bl = b.label.item()
+                bl = b.label
                 b.x = b.x.to(torch.float32)
                 b_e = self._gen_embedding(b)
 
@@ -239,34 +238,10 @@ class KYNEvaluator:
             logger.info(f"Metrics for ({metric_dict[0]}): {metric_dict[1]}")
 
 
-class KYNVulnEvaluator:
-    def __init__(
-        self,
-        model: nn.Module,
-        model_name: str,
-        target_data_path: str,
-        search_data_paths: List[str],
-        vulnerable_functions: List[str],
-        device: str = "cuda",
-        target_arch: str = None,
-        no_metadata: bool = False,
-        save_metrics_to_file: bool = True,
-    ):
+class CosineSimilarityEvaluator:
+    def __init__(self, model: torch.nn.Module, device: str = "cuda"):
         self.model = model
-        self.model_name = model_name
-        self.target_data_path = target_data_path
-        self.search_data_paths = search_data_paths
-        self.vulnerable_functions = vulnerable_functions
         self.device = device
-        self.target_arch = target_arch
-        self.no_metadata = no_metadata
-        self.save_metrics_to_file = save_metrics_to_file
-
-        # Initialize empty containers
-        self.target_graphs = []
-        self.target_embeddings = []
-        self.metric_results = []
-
         self._prepare_model()
 
     def _prepare_model(self) -> None:
@@ -275,249 +250,204 @@ class KYNVulnEvaluator:
         self.model.to(self.device)
         assert self.model.training is False
 
-    def _process_graph_data(self, data: dict) -> dict:
-        """Process graph data by handling metadata."""
-        if self.no_metadata:
-            for node in data["nodes"]:
-                del node["functionFeatureSubset"]
-        else:
-            for node in data["nodes"]:
-                del node["functionFeatureSubset"]["signature"]
-                del node["functionFeatureSubset"]["name"]
-                for k, v in node["functionFeatureSubset"].items():
-                    node[k] = v
-                del node["functionFeatureSubset"]
-        return data
+    def _load_json_to_rustworkx(self, data: dict) -> rx.PyDiGraph:
+        """
+        Load a JSON graph representation into a Rustworkx DiGraph.
+        """
+        G = rx.PyDiGraph()
+        node_indices = {}
 
-    def _convert_to_pyg_graph(self, data: dict, file_path: str) -> Optional[Data]:
-        """Convert JSON graph data to PyG graph."""
-        try:
-            G = json_graph.adjacency_graph(data)
-            bb = nx.edge_betweenness_centrality(G, normalized=False)
-            nx.set_edge_attributes(G, bb, "weight")
-            G.graph["name"] = Path(file_path).name.split("-")[0]
+        # Add nodes
+        for node in data["nodes"]:
+            node_index = G.add_node(node)
+            node_indices[node["id"]] = node_index
 
-            pyg = from_networkx(
-                G,
-                group_node_attrs=[
-                    "ninstrs",
-                    "edges",
-                    "indegree",
-                    "outdegree",
-                    "nlocals",
-                    "nargs",
-                ],
-                group_edge_attrs=["weight"],
+        # Add edges
+        for edge in data["edges"]:
+            source = node_indices[edge["source"]]
+            target = node_indices[edge["target"]]
+            G.add_edge(source, target, None)
+
+        return G
+
+    def _generate_embeddings(self, graph_data) -> torch.Tensor:
+        """
+        Generate embeddings for a single graph.
+        Returns a tensor of shape (1, embedding_dim).
+        """
+        with torch.inference_mode():
+            graph_data = graph_data.to(self.device)
+
+            embed = self.model(
+                x=graph_data.x,
+                edge_index=graph_data.edge_index,
+                batch=graph_data.batch,
+                edge_weight=graph_data.edge_attr,
             )
-            pyg.x = pyg.x.to(torch.float32)
-            return pyg
+            return embed
+
+    def _load_and_transform_graph(self, file_path: str) -> torch.Tensor:
+        """
+        Load a JSON graph from 'file_path', transform to PyG data, and generate its embedding.
+        Returns the embedding tensor of shape (1, embedding_dim).
+        """
+        try:
+            # Load JSON graph
+            with open(file_path, "rb") as f:
+                data = orjson.loads(f.read())
+
+            # Convert JSON -> rustworkx
+            G = self._load_json_to_rustworkx(data)
+
+            # (Optional) compute edge betweenness or other features
+            bb = rx.edge_betweenness_centrality(G, normalized=False)
+            for edge_idx in G.edge_indices():
+                G.update_edge_by_index(edge_idx, {"weight": bb[edge_idx]})
+
+            # Wrap in our custom GraphWithMetadata, if needed
+            G = GraphWithMetadata(G)
+            G.metadata["name"] = os.path.basename(file_path)
+
+            # Convert rustworkx -> PyTorch Geometric Data
+            group_node_attrs = [
+                "ninstrs",
+                "edges",
+                "indegree",
+                "outdegree",
+                "nlocals",
+                "nargs",
+            ]
+            pyg_data = from_rustworkx(
+                G, group_node_attrs=group_node_attrs, group_edge_attrs=["weight"]
+            )
+            pyg_data.validate()
+
+            # Generate the embedding
+            embedding = self._generate_embeddings(pyg_data)
+            return embedding
+
         except Exception as e:
-            logger.debug(f"Failed to convert graph {file_path}: {str(e)}")
+            logger.error(f"Failed to load or transform {file_path}: {e}")
             return None
 
-    def _load_graphs(self, data_path: str, vuln_filter: bool = False) -> List[Data]:
-        """Load graphs from JSON files."""
-        graphs = []
-        graph_paths = glob.glob(f"{data_path}/*.json")
+    def compute_similarity(
+        self, embedding1: torch.Tensor, embedding2: torch.Tensor, dim: int = 1
+    ) -> float:
+        """
+        Compute the cosine similarity between two embeddings.
+        """
+        # Ensure the embeddings are of floating point type
+        embedding1 = embedding1.float()
+        embedding2 = embedding2.float()
 
-        if vuln_filter:
-            graph_paths = [
-                p
-                for p in graph_paths
-                if any(
-                    vuln == Path(p).name.split("-")[0][4:]
-                    for vuln in self.vulnerable_functions
-                )
-            ]
+        # Compute cosine similarity
+        similarity = torch.cosine_similarity(embedding1, embedding2, dim=dim)
+        if similarity.numel() == 1:
+            return similarity.item()
+        return similarity
 
-        for file_path in tqdm(graph_paths, desc="Loading graphs"):
-            try:
-                with open(file_path) as fd:
-                    data = json.load(fd)
-                data = self._process_graph_data(data)
-                pyg = self._convert_to_pyg_graph(data, file_path)
-                if pyg is not None:
-                    graphs.append(pyg)
-            except Exception as e:
-                logger.debug(f"Failed to load graph {file_path}: {str(e)}")
+    def compare_one_to_many(
+        self,
+        target_file: str,
+        search_dir: str,
+        top_k: int = 5,
+        max_files: int = -1,  # <--- -1 means "no limit"
+    ):
+        """
+        1. Load and embed the 'target_file'.
+        2. For each file in 'search_dir', load and embed, then compute similarity
+           to the target embedding.
+        3. Sort results by similarity (descending) and return top_k.
+
+        :param target_file: Path to the single target JSON file.
+        :param search_dir: Directory containing candidate JSON files to compare against.
+        :param top_k: How many of the most similar functions to return.
+        :param max_files: Maximum number of files to process. -1 means no limit.
+        :param valid_extensions: Tuple of valid file extensions.
+        :return: A list of tuples (similarity, filename) for the top_k similar graphs.
+        """
+        # 1) Get target embedding
+        target_embedding = self._load_and_transform_graph(target_file)
+        if target_embedding is None:
+            logger.error(f"Failed to produce embedding for target {target_file}")
+            return []
+
+        # 2) Collect similarities
+        similarity_scores = []
+        search_dir_path = Path(search_dir)
+        if not search_dir_path.exists() or not search_dir_path.is_dir():
+            logger.error(
+                f"Search directory {search_dir} does not exist or is not a directory."
+            )
+            return []
+
+        count = 0
+        file_list = sorted(search_dir_path.glob("*"))
+
+        for file_path in tqdm(file_list, desc="Comparing graphs"):
+            # Stop early if we've reached the max_files limit
+            if max_files != -1 and count >= max_files:
+                logger.debug(f"Stopping early (max_files={max_files})")
+                break
+
+            # Generate embedding for this search graph
+            candidate_embedding = self._load_and_transform_graph(str(file_path))
+            if candidate_embedding is None:
+                # Skip failures
+                logger.warning(f"Failure during canditate embedding creation")
                 continue
 
-        return graphs
+            # Compute similarity
+            sim_score = self.compute_similarity(target_embedding, candidate_embedding)
+            similarity_scores.append((sim_score, file_path.name))
 
-    def _generate_embeddings(
-        self, graphs: List[Data]
-    ) -> List[Tuple[str, torch.Tensor]]:
-        """Generate embeddings for a list of graphs."""
-        embeddings = []
-        with torch.inference_mode():
-            for graph in tqdm(graphs, desc="Generating embeddings"):
-                graph = graph.to(self.device)
-                embed = self.model.forward(
-                    x=graph.x,
-                    edge_index=graph.edge_index,
-                    batch=graph.batch,
-                    edge_weight=graph.edge_attr,
-                )
-                embeddings.append((graph.name, embed))
-        return embeddings
+            count += 1
 
-    def _compute_rankings(
-        self,
-        vuln_queries: List[Tuple[str, torch.Tensor]],
-        search_embeddings: List[Tuple[str, torch.Tensor]],
-    ) -> Tuple[List[int], List[float]]:
-        """Compute rankings and similarity scores."""
-        ranks = []
-        sim_scores = []
+        # 3) Sort by descending similarity
+        similarity_scores.sort(key=lambda x: x[0], reverse=True)
 
-        for name, target in vuln_queries:
-            similarities = []
-            names = []
+        # Find the rank of the actual target function
+        target_filename = os.path.basename(target_file)
+        actual_rank = next(
+            (
+                i + 1
+                for i, (_, fname) in enumerate(similarity_scores)
+                if fname == target_filename
+            ),
+            None,
+        )
 
-            for sp_name, sp_embed in search_embeddings:
-                sim = cosine_similarity(target, sp_embed)
-                similarities.append(sim)
-                names.append(sp_name)
-
-            zipped = list(zip(similarities, names))
-            zipped.sort(reverse=True)
-
-            for i, (sim, match_name) in enumerate(zipped):
-                if name == match_name:
-                    ranks.append(i + 1)
-                    sim_scores.append(round(sim.item(), 4))
-                    logger.info(
-                        f"Found {name} at rank {i + 1} with similarity score {round(sim.item(), 4)} to {match_name}"
-                    )
-
-        return ranks, sim_scores
-
-    def _write_metrics_to_file(
-        self, search_data_path: str, ranks: List[int], sim_scores: List[float]
-    ) -> None:
-        """Write evaluation metrics to file."""
-        if self.save_metrics_to_file:
-            compare_arch = search_data_path.split("_")[-2]
-            output_path = f"{self.model_name}_{self.target_arch}vs{compare_arch}.txt"
-
-            with open(output_path, "w") as f:
-                f.write(
-                    f"Ranks: {ranks}\n"
-                    f"Mean Rank: {round(mean(ranks))}\n"
-                    f"Median Rank: {median(ranks)}\n"
-                    f"Similarity Scores: {sim_scores}\n"
-                )
-
-    def evaluate(self) -> List[dict]:
-        """Run the full evaluation process."""
-        # Load and embed target graphs
-        logger.info(f"Loading target graphs from {self.target_data_path}")
-        self.target_graphs = self._load_graphs(self.target_data_path)
-        self.target_embeddings = self._generate_embeddings(self.target_graphs)
-
-        # Evaluate against each search dataset
-        for search_data_path in self.search_data_paths:
-            logger.info(f"Evaluating against {search_data_path}")
-
-            # Load and embed search pool graphs
-            vuln_query_graphs = self._load_graphs(search_data_path, vuln_filter=True)
-            vuln_queries = self._generate_embeddings(vuln_query_graphs)
-
-            # Compute rankings and similarities
-            ranks, sim_scores = self._compute_rankings(
-                vuln_queries, self.target_embeddings
+        # Print the rank of the actual function
+        if actual_rank:
+            print(
+                f"Actual function '{target_filename}' is ranked at position {actual_rank} out of {len(similarity_scores)}."
             )
+        else:
+            print(f"Actual function '{target_filename}' not found in the ranking.")
 
-            # Calculate metrics
-            metrics = {
-                "search_data": search_data_path,
-                "ranks": ranks,
-                "mean_rank": round(mean(ranks)),
-                "median_rank": median(ranks),
-                "similarity_scores": sim_scores,
-                "mean_similarity": round(mean(sim_scores), 4),
-            }
-
-            self.metric_results.append(metrics)
-
-            # Log results
-            logger.info(
-                f"Results for {search_data_path} Ranks: {metrics['ranks']} "
-                f"Mean Rank: {metrics['mean_rank']}\n"
-                f"Median Rank: {metrics['median_rank']}\n"
-                f"Mean Similarity: {metrics['mean_similarity']}"
-            )
-
-            # Write metrics to file if requested
-            self._write_metrics_to_file(search_data_path, ranks, sim_scores)
-
-        return self.metric_results
+        # Return the top_k most similar functions (same as before)
+        return similarity_scores[:top_k]
 
 
 if __name__ == "__main__":
+    import torch
     from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
-    import os
 
-    # Example usage
-    MODEL_PATH = "../cc4c0267.ep20"
+    MODEL_PATH = "./1e7b2a8d.ep350"
     model = GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge(256, 6)
-    model_dict = torch.load(MODEL_PATH)
-    model.load_state_dict(model_dict)
+    model.load_state_dict(torch.load(MODEL_PATH))
 
-    TPLINK_VULNS = [
-        "CMS_decrypt",
-        "PKCS7_dataDecode",
-        "BN_bn2dec",
-        "EVP_EncodeUpdate",
-        "BN_dec2bn",
-        "BN_hex2bn",
-    ]
+    evaluator = CosineSimilarityEvaluator(model=model, device="cuda")
 
-    NETGEAR_VULNS = ["CMS_decrypt", "PKCS7_dataDecode", "MDC2_Update", "BN_bn2dec"]
-
-    # Define paths
-    DATA_ROOT = "/fast-disk/Dataset-Vuln/cgs"
-    TPLINK_DATA = os.path.join(
-        DATA_ROOT,
-        "libcrypto.so.1.0.0_TP-Link_Deco-M4_1.0.2d_mips32_cg-onehopcgcallers-meta",
+    target_file = (
+        "/home/prime/dev/edges/cgn/eu4_arm_1.27.2/CPdxMouse::LoadCursors_subgraph.json"
     )
-    TARGET_DATA = os.path.join(
-        DATA_ROOT,
-        "libcrypto.so.1.0.0_NETGEAR_R7000_1.0.2h_arm32_cg-onehopcgcallers-meta",
-    )
-    SEARCH_PATHS = [
-        os.path.join(
-            DATA_ROOT,
-            "libcrypto.so.1.0.0_openssl_1.0.2d_mips32_cg-onehopcgcallers-meta",
-        ),
-        os.path.join(
-            DATA_ROOT, "libcrypto.so.1.0.0_openssl_1.0.2d_x64_cg-onehopcgcallers-meta"
-        ),
-        os.path.join(
-            DATA_ROOT, "libcrypto.so.1.0.0_openssl_1.0.2d_x86_cg-onehopcgcallers-meta"
-        ),
-        os.path.join(
-            DATA_ROOT, "libcrypto.so.1.0.0_openssl_1.0.2d_arm32_cg-onehopcgcallers-meta"
-        ),
-        os.path.join(
-            DATA_ROOT, "libcrypto.so.1.0.0_openssl_1.0.2d_ppc32_cg-onehopcgcallers-meta"
-        ),
-        os.path.join(
-            DATA_ROOT,
-            "libcrypto.so.1.0.0_openssl_1.0.0d_riscv32_cg-onehopcgcallers-meta",
-        ),
-        # Add other paths as needed
-    ]
+    search_folder = "/home/prime/dev/edges/cgn/eu4_arm_1.35.2/"
 
-    # Create evaluator instance
-    evaluator = KYNVulnEvaluator(
-        model=model,
-        model_name="best-cross",
-        target_data_path=TPLINK_DATA,
-        search_data_paths=SEARCH_PATHS,
-        vulnerable_functions=TPLINK_VULNS,
-        target_arch="arm32",
+    top_k_results = evaluator.compare_one_to_many(
+        target_file=target_file, search_dir=search_folder, top_k=5, max_files=-1
     )
 
-    # Run evaluation
-    results = evaluator.evaluate()
+    print("Top 5 Most Similar Functions:")
+    for score, fname in top_k_results:
+        print(f"{fname} -> similarity={score:.4f}")
