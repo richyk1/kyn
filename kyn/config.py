@@ -20,15 +20,15 @@ class KYNConfig:
     batch_size: int = 256
     model_channels: int = 256
     pooling: str = "max"
-    circle_loss_m: float = 0.4
-    circle_loss_gamma: int = 80
+    circle_loss_m: float = 0.25
+    circle_loss_gamma: int = 256
     num_examples_in_batch: int = 4
     exp_uuid: str = str(uuid.uuid4())[:8]
     feature_dim: int = 6
     dropout_ratio: float = 0.5
     number_eval_sp: int = 500
     with_edges: bool = True
-    sampler_epoch_size: int = 100000
+    sampler_epoch_size: int = 200000
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert the dataclass instance to a dictionary.

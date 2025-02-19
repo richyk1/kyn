@@ -22,6 +22,7 @@ from torch import cosine_similarity
 from torch_geometric.data import Data
 from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG, RetrievalRecall
 from tqdm import tqdm
+from torch_geometric.data import Data, Batch
 
 
 class KYNEvaluator:
@@ -320,11 +321,8 @@ class CosineSimilarityEvaluator:
             pyg_data = from_rustworkx(
                 G, group_node_attrs=group_node_attrs, group_edge_attrs=["weight"]
             )
-            pyg_data.validate()
 
-            # Generate the embedding
-            embedding = self._generate_embeddings(pyg_data)
-            return embedding
+            return pyg_data
 
         except Exception as e:
             logger.error(f"Failed to load or transform {file_path}: {e}")
@@ -351,29 +349,15 @@ class CosineSimilarityEvaluator:
         target_file: str,
         search_dir: str,
         top_k: int = 5,
-        max_files: int = -1,  # <--- -1 means "no limit"
+        max_files: int = -1,
     ):
-        """
-        1. Load and embed the 'target_file'.
-        2. For each file in 'search_dir', load and embed, then compute similarity
-           to the target embedding.
-        3. Sort results by similarity (descending) and return top_k.
-
-        :param target_file: Path to the single target JSON file.
-        :param search_dir: Directory containing candidate JSON files to compare against.
-        :param top_k: How many of the most similar functions to return.
-        :param max_files: Maximum number of files to process. -1 means no limit.
-        :param valid_extensions: Tuple of valid file extensions.
-        :return: A list of tuples (similarity, filename) for the top_k similar graphs.
-        """
-        # 1) Get target embedding
-        target_embedding = self._load_and_transform_graph(target_file)
-        if target_embedding is None:
-            logger.error(f"Failed to produce embedding for target {target_file}")
+        # 1) Load PyG Data for the target (NOT the embedding yet).
+        target_pyg_data = self._load_and_transform_graph(target_file)
+        if target_pyg_data is None:
+            logger.error(f"Failed to create PyG Data for target {target_file}")
             return []
 
-        # 2) Collect similarities
-        similarity_scores = []
+        # 2) Collect PyG Data for each candidate
         search_dir_path = Path(search_dir)
         if not search_dir_path.exists() or not search_dir_path.is_dir():
             logger.error(
@@ -381,33 +365,66 @@ class CosineSimilarityEvaluator:
             )
             return []
 
-        count = 0
         file_list = sorted(search_dir_path.glob("*"))
 
-        for file_path in tqdm(file_list, desc="Comparing graphs"):
-            # Stop early if we've reached the max_files limit
+        all_data_list = []
+        all_filenames = []
+
+        count = 0
+        for file_path in tqdm(file_list, desc="Collecting PyG data"):
             if max_files != -1 and count >= max_files:
-                logger.debug(f"Stopping early (max_files={max_files})")
                 break
 
-            # Generate embedding for this search graph
-            candidate_embedding = self._load_and_transform_graph(str(file_path))
-            if candidate_embedding is None:
-                # Skip failures
-                logger.warning(f"Failure during canditate embedding creation")
+            candidate_pyg_data = self._load_and_transform_graph(str(file_path))
+            if candidate_pyg_data is None:
                 continue
 
-            # Compute similarity
-            sim_score = self.compute_similarity(target_embedding, candidate_embedding)
-            similarity_scores.append((sim_score, file_path.name))
-
+            all_data_list.append(candidate_pyg_data)
+            all_filenames.append(file_path.name)
             count += 1
 
-        # 3) Sort by descending similarity
+        if not all_data_list:
+            logger.warning("No valid candidate graphs found.")
+            return []
+
+        # 3) Convert the *target* into a single-item Batch and get its embedding
+        target_batch = Batch.from_data_list([target_pyg_data]).to(self.device)
+        with torch.inference_mode():
+            target_embedding = self.model(
+                x=target_batch.x,
+                edge_index=target_batch.edge_index,
+                batch=target_batch.batch,
+                edge_weight=target_batch.edge_attr,
+            )
+        # target_embedding shape -> (1, D)
+
+        # 4) Batch all candidate graphs in one forward pass
+        candidate_batch = Batch.from_data_list(all_data_list).to(self.device)
+
+        with torch.inference_mode():
+            candidate_embeddings = self.model(
+                x=candidate_batch.x,
+                edge_index=candidate_batch.edge_index,
+                batch=candidate_batch.batch,
+                edge_weight=candidate_batch.edge_attr,
+            )
+        # candidate_embeddings shape -> (N, D)
+
+        # 5) Compute similarity in a vectorized manner
+        # target_embedding is (1, D), candidate_embeddings is (N, D)
+        # -> sim_scores shape (N,)
+        sim_scores = torch.cosine_similarity(
+            target_embedding, candidate_embeddings, dim=1
+        )
+        sim_scores = sim_scores.cpu().tolist()
+
+        similarity_scores = list(zip(sim_scores, all_filenames))
         similarity_scores.sort(key=lambda x: x[0], reverse=True)
 
-        # Find the rank of the actual target function
+        # 6) Optionally find the rank of the "actual" function
         target_filename = os.path.basename(target_file)
+        # TODO: Edit!!!
+        target_filename = "CCountry::SetArmyTradition_subgraph.json"
         actual_rank = next(
             (
                 i + 1
@@ -416,16 +433,14 @@ class CosineSimilarityEvaluator:
             ),
             None,
         )
-
-        # Print the rank of the actual function
         if actual_rank:
             print(
-                f"Actual function '{target_filename}' is ranked at position {actual_rank} out of {len(similarity_scores)}."
+                f"Actual function '{target_filename}' is ranked "
+                f"at position {actual_rank} out of {len(similarity_scores)}."
             )
         else:
             print(f"Actual function '{target_filename}' not found in the ranking.")
 
-        # Return the top_k most similar functions (same as before)
         return similarity_scores[:top_k]
 
 
@@ -439,10 +454,8 @@ if __name__ == "__main__":
 
     evaluator = CosineSimilarityEvaluator(model=model, device="cuda")
 
-    target_file = (
-        "/home/prime/dev/edges/cgn/eu4_arm_1.27.2/CPdxMouse::LoadCursors_subgraph.json"
-    )
-    search_folder = "/home/prime/dev/edges/cgn/eu4_arm_1.35.2/"
+    target_file = "/home/prime/dev/edges/cgn/eu4_exe_1.36.2/140362B80_subgraph.json"
+    search_folder = "/home/prime/dev/edges/cgn/eu4_arm_1.36.2/"
 
     top_k_results = evaluator.compare_one_to_many(
         target_file=target_file, search_dir=search_folder, top_k=5, max_files=-1
