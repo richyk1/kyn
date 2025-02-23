@@ -64,6 +64,8 @@ def train_model(args):
         train_data=args.train_data,
         train_labels=args.train_labels,
         model_arch=args.model_name,
+        test_data=args.test_data,
+        test_labels=args.test_labels,
     )
 
     if (
@@ -214,6 +216,12 @@ def main():
         "--validate-examples",
         action="store_true",
         help="Validate examples during training",
+    )
+    train_parser.add_argument(
+        "--test-data", help="Path to test data pickle file (for validation)"
+    )
+    train_parser.add_argument(
+        "--test-labels", help="Path to test labels pickle file (for validation)"
     )
 
     # Evaluation parser

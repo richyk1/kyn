@@ -448,7 +448,7 @@ if __name__ == "__main__":
     import torch
     from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
 
-    MODEL_PATH = "./1e7b2a8d.ep350"
+    MODEL_PATH = "./0d5b3127.ep350"
     model = GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge(256, 6)
     model.load_state_dict(torch.load(MODEL_PATH))
 

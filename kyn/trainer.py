@@ -14,6 +14,7 @@ from kyn.utils import validate_device
 import torch
 from tqdm import tqdm
 from statistics import mean
+import math
 
 
 class KYNTrainer:
@@ -56,6 +57,10 @@ class KYNTrainer:
         self.scheduler = CosineAnnealingWarmRestarts(
             self.optim, 50, 2, eta_min=config.min_learning_rate
         )
+
+        if config.sampler_epoch_size == 0:
+            config.sampler_epoch_size = len(self.labels)
+
         self.sampler = MPerClassSampler(
             self.labels,
             config.num_examples_in_batch,
@@ -67,28 +72,31 @@ class KYNTrainer:
         )
         self.num_iters = len(self.dataloader)
 
+        # Add validation data loading
+        logger.info("Loading validation data...")
+        with open(config.test_data, "rb") as fp:
+            self.val_graphs = pickle.load(fp)
+
+        logger.info("Loading validation labels...")
+        with open(config.test_labels, "rb") as fp:
+            self.val_labels = pickle.load(fp)
+
+        # Create validation DataLoader
+        self.val_dataloader = DataLoader(
+            self.val_graphs, batch_size=config.batch_size, shuffle=True
+        )
+
         self.model = model
         model.to(self.device)
 
-    def train(self, validate_examples: bool = False):
-        losses = []
-        batch_losses = []
+    def _validate(self):
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
 
-        for epoch in tqdm(range(self.config.epochs)):
-            self.optim.zero_grad()
-            if len(losses) > 0:
-                if self.log_to_wandb:
-                    wandb.log(
-                        {"avg_loss": mean(losses), "batch_loss": mean(batch_losses)}
-                    )
-                batch_losses = []
-
-            for i, data in enumerate(self.dataloader):
-                if validate_examples:
-                    data.validate()
-
-                data.to("cuda")
-
+        with torch.no_grad():
+            for data in self.val_dataloader:
+                data = data.to(self.device)
                 if self.config.with_edges:
                     embeds = self.model(
                         x=data.x,
@@ -101,24 +109,120 @@ class KYNTrainer:
                         x=data.x, edge_index=data.edge_index, batch=data.batch
                     )
 
+                # Calculate loss
                 hard_pairs = self.miner(embeds, data["label"])
+                loss = self.loss_func(embeds, data["label"], hard_pairs)
+                total_loss += loss.item()
+                num_batches += 1
 
+        avg_val_loss = total_loss / num_batches
+        return {"val_loss": avg_val_loss}
+
+    def train(self, validate_examples: bool = False):
+        best_val_loss = float("inf")
+        training_progress = tqdm(range(self.config.epochs), desc="Training Progress")
+
+        for epoch in training_progress:
+            # Training phase
+            self.model.train()
+            epoch_train_loss = 0.0
+            batch_progress = tqdm(
+                self.dataloader,
+                desc=f"Epoch {epoch+1}/{self.config.epochs}",
+                leave=False,
+            )
+
+            for i, data in enumerate(batch_progress):
+                self.optim.zero_grad()
+
+                if validate_examples:
+                    data.validate()
+
+                # Move data to device
+                data = data.to(self.device)
+
+                # Forward pass
+                if self.config.with_edges:
+                    embeds = self.model(
+                        x=data.x,
+                        edge_index=data.edge_index,
+                        batch=data.batch,
+                        edge_weight=data.edge_attr,
+                    )
+                else:
+                    embeds = self.model(
+                        x=data.x, edge_index=data.edge_index, batch=data.batch
+                    )
+
+                # Calculate loss
+                hard_pairs = self.miner(embeds, data["label"])
                 loss = self.loss_func(embeds, data["label"], hard_pairs)
 
-                if self.log_to_wandb:
-                    wandb.log({"loss": loss.item()})
-
-                losses.append(loss.item())
-                batch_losses.append(loss.item())
+                # Backward pass and optimize
                 loss.backward()
                 self.optim.step()
-                self.optim.zero_grad()
                 self.scheduler.step(epoch + i / self.num_iters)
 
-                if self.log_to_wandb:
-                    wandb.log({"current_lr": self.optim.param_groups[0]["lr"]})
+                # Update metrics
+                epoch_train_loss += loss.item()
+                current_lr = self.optim.param_groups[0]["lr"]
 
-    def save_model(self):
-        torch.save(
-            self.model.state_dict(), f"{self.config.exp_uuid}.ep{self.config.epochs}"
-        )
+                # Update batch progress description
+                batch_progress.set_postfix(
+                    {"batch_loss": f"{loss.item():.4f}", "lr": f"{current_lr:.2e}"}
+                )
+
+                # Log batch metrics to wandb
+                if self.log_to_wandb:
+                    wandb.log(
+                        {
+                            "batch/train_loss": loss.item(),
+                            "batch/learning_rate": current_lr,
+                        }
+                    )
+
+            # Calculate epoch training metrics
+            avg_train_loss = epoch_train_loss / len(self.dataloader)
+
+            # Validation phase
+            self.model.eval()
+            val_metrics = self._validate()
+            avg_val_loss = val_metrics["val_loss"]
+
+            # Update progress bar
+            training_progress.set_postfix(
+                {
+                    "train_loss": f"{avg_train_loss:.4f}",
+                    "val_loss": f"{avg_val_loss:.4f}",
+                }
+            )
+
+            # WandB logging
+            if self.log_to_wandb:
+                wandb.log(
+                    {
+                        "epoch/train_loss": avg_train_loss,
+                        "epoch/val_loss": avg_val_loss,
+                        "epoch": epoch,
+                    }
+                )
+
+            # Save best model
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                self.save_model(prefix="best")
+                if self.log_to_wandb:
+                    wandb.run.summary["best_val_loss"] = best_val_loss
+
+            # Save periodic checkpoints
+            if (epoch + 1) % self.config.save_interval == 0:
+                self.save_model(prefix=f"epoch_{epoch+1}")
+
+        # Final save
+        self.save_model(prefix="final")
+        if self.log_to_wandb:
+            wandb.save(f"{self.config.exp_uuid}_*.ep{self.config.epochs}")
+
+    def save_model(self, prefix=""):
+        filename = f"{self.config.exp_uuid}{f'_{prefix}' if prefix else ''}.ep{self.config.epochs}"
+        torch.save(self.model.state_dict(), filename)
