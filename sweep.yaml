@@ -1,0 +1,26 @@
+program: cli.py
+method: bayes  # Options: grid, random, bayes
+metric:
+  name: epoch/val_loss
+  goal: minimize
+parameters:
+  learning_rate:
+    distribution: uniform
+    min: 1e-6
+    max: 1e-4
+  batch_size:
+    values: [32, 64, 128, 256]
+  hidden_channels:
+    values: [128, 256, 512]
+  circle_loss_m:
+    min: 0.1
+    max: 0.4
+    distribution: uniform
+  circle_loss_gamma:
+    values: [64, 128, 256, 512]
+  dropout_ratio:
+    values: [0.3, 0.4, 0.5, 0.6, 0.7]
+  early_stopping_patience:
+    values: [25, 50, 75]
+  early_stopping_delta:
+    values: [0.001, 0.005, 0.01, 0.05]

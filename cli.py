@@ -3,6 +3,8 @@ from pathlib import Path
 
 import torch
 from loguru import logger
+import wandb
+import yaml
 
 from kyn.dataset import KYNDataset
 from kyn.trainer import KYNTrainer
@@ -53,20 +55,36 @@ def generate_dataset(args):
     logger.info(f"Dataset saved with prefix: {args.output_prefix}")
 
 
-def train_model(args):
+def train_model(args, sweep=False):
     """Train a model using the specified configuration."""
-    config = KYNConfig(
-        learning_rate=args.learning_rate,
-        model_channels=args.model_channels,
-        feature_dim=args.feature_dim,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        train_data=args.train_data,
-        train_labels=args.train_labels,
-        model_arch=args.model_name,
-        test_data=args.test_data,
-        test_labels=args.test_labels,
-    )
+    if sweep:
+        # Get parameters from wandb.config during sweeps
+        config = KYNConfig(
+            learning_rate=5e-4,
+            min_learning_rate=wandb.config.learning_rate,
+            model_channels=wandb.config.hidden_channels,
+            batch_size=wandb.config.batch_size,
+            train_data=args.train_data,
+            train_labels=args.train_labels,
+            model_arch=args.model_name,
+            test_data=args.test_data,
+            test_labels=args.test_labels,
+            circle_loss_m=wandb.config.circle_loss_m,
+            circle_loss_gamma=wandb.config.circle_loss_gamma,
+            dropout_ratio=wandb.config.dropout_ratio,
+        )
+    else:
+        config = KYNConfig(
+            learning_rate=args.learning_rate,
+            model_channels=args.model_channels,
+            feature_dim=args.feature_dim,
+            batch_size=args.batch_size,
+            train_data=args.train_data,
+            train_labels=args.train_labels,
+            model_arch=args.model_name,
+            test_data=args.test_data,
+            test_labels=args.test_labels,
+        )
 
     if (
         args.model_name == "GraphConvInstanceGlobalMaxSmall"
@@ -84,8 +102,13 @@ def train_model(args):
     )
 
     trainer.train(validate_examples=args.validate_examples)
-    trainer.save_model()
-    logger.info(f"Model saved with UUID: {config.exp_uuid}")
+
+    if not sweep:
+        trainer.save_model(prefix="final")
+        if trainer.log_to_wandb:
+            wandb.save(f"{trainer.config.exp_uuid}_*.ep{trainer.config.epochs}")
+
+        logger.info(f"Model saved with UUID: {config.exp_uuid}")
 
 
 def evaluate_model(args):
@@ -140,6 +163,41 @@ def evaluate_vuln_model(args):
         logger.info(f"Mean Similarity: {result['mean_similarity']}")
 
 
+# Add new sweep command parser
+def add_sweep_parser(subparsers):
+    sweep_parser = subparsers.add_parser("sweep", help="Run hyperparameter sweep")
+    sweep_parser.add_argument(
+        "--sweep-config", required=True, help="Path to sweep configuration YAML file"
+    )
+    sweep_parser.add_argument(
+        "--count", type=int, default=20, help="Number of sweep runs to execute"
+    )
+    sweep_parser.add_argument(
+        "--model-name", required=True, help="Name of the model architecture to use"
+    )
+    sweep_parser.add_argument(
+        "--train-data", required=True, help="Path to training data pickle file"
+    )
+    sweep_parser.add_argument(
+        "--train-labels", required=True, help="Path to training labels pickle file"
+    )
+    sweep_parser.add_argument(
+        "--test-data", help="Path to test data pickle file (for validation)"
+    )
+    sweep_parser.add_argument(
+        "--test-labels", help="Path to test labels pickle file (for validation)"
+    )
+    sweep_parser.add_argument(
+        "--feature-dim", type=int, default=6, help="Feature dimension"
+    )
+    sweep_parser.add_argument(
+        "--wandb-project", help="Weights & Biases project name", required=True
+    )
+    sweep_parser.add_argument(
+        "--device", default="cuda", help="Device to use (cuda, cpu, mps)"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="KYN - Dataset Generation, Training, and Evaluation CLI"
@@ -148,6 +206,8 @@ def main():
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    add_sweep_parser(subparsers)  # Add this line
 
     # Dataset generation parser
     dataset_parser = subparsers.add_parser("generate", help="Generate a dataset")
@@ -200,9 +260,6 @@ def main():
     )
     train_parser.add_argument(
         "--feature-dim", type=int, default=6, help="Feature dimension"
-    )
-    train_parser.add_argument(
-        "--epochs", type=int, default=350, help="Number of epochs"
     )
     train_parser.add_argument("--batch-size", type=int, default=256, help="Batch size")
     train_parser.add_argument(
@@ -326,6 +383,51 @@ def main():
         evaluate_model(args)
     elif args.command == "vuln-evaluate":
         evaluate_vuln_model(args)
+    elif args.command == "sweep":
+        with open(args.sweep_config, "r") as f:
+            sweep_config = yaml.safe_load(f)
+
+        # Initialize sweep
+        sweep_id = wandb.sweep(sweep=sweep_config, project=args.wandb_project)
+
+        # Define sweep training function
+        def sweep_train():
+            train_args = argparse.Namespace(
+                model_name=args.model_name,
+                train_data=args.train_data,
+                train_labels=args.train_labels,
+                test_data=args.test_data,
+                test_labels=args.test_labels,
+                use_wandb=True,
+                wandb_project=args.wandb_project,
+                device=args.device,
+                validate_examples=False,
+            )
+            wandb.init()
+
+            # fuse sweep config with KYNConfig to pass to wandb, cheap solution
+            _config = KYNConfig(
+                learning_rate=5e-4,
+                min_learning_rate=wandb.config.learning_rate,
+                model_channels=wandb.config.hidden_channels,
+                batch_size=wandb.config.batch_size,
+                train_data=args.train_data,
+                train_labels=args.train_labels,
+                model_arch=args.model_name,
+                test_data=args.test_data,
+                test_labels=args.test_labels,
+                circle_loss_m=wandb.config.circle_loss_m,
+                circle_loss_gamma=wandb.config.circle_loss_gamma,
+                dropout_ratio=wandb.config.dropout_ratio,
+            )
+
+            wandb.config.update(_config.to_dict())
+
+            train_model(train_args, sweep=True)
+
+        # Run sweep agent
+        wandb.agent(sweep_id, function=sweep_train, count=args.count)
+        return
     else:
         parser.print_help()
 

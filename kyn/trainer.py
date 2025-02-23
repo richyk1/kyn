@@ -86,6 +86,13 @@ class KYNTrainer:
             self.val_graphs, batch_size=config.batch_size, shuffle=True
         )
 
+        # Early stopping parameters
+        self.early_stopping_patience = config.early_stopping_patience
+        self.early_stopping_delta = config.early_stopping_delta
+        self.epochs_without_improvement = 0
+        self.best_val_loss = float("inf")
+
+        # Load model to device
         self.model = model
         model.to(self.device)
 
@@ -119,7 +126,6 @@ class KYNTrainer:
         return {"val_loss": avg_val_loss}
 
     def train(self, validate_examples: bool = False):
-        best_val_loss = float("inf")
         training_progress = tqdm(range(self.config.epochs), desc="Training Progress")
 
         for epoch in training_progress:
@@ -207,16 +213,16 @@ class KYNTrainer:
                     }
                 )
 
-            # Save best model
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                self.save_model(prefix="best")
-                if self.log_to_wandb:
-                    wandb.run.summary["best_val_loss"] = best_val_loss
+            # Early stopping check
+            if (self.best_val_loss - avg_val_loss) > self.early_stopping_delta:
+                self.best_val_loss = avg_val_loss
+                self.epochs_without_improvement = 0
+            else:
+                self.epochs_without_improvement += 1
 
-            # Save periodic checkpoints
-            if (epoch + 1) % self.config.save_interval == 0:
-                self.save_model(prefix=f"epoch_{epoch+1}")
+            if self.epochs_without_improvement >= self.early_stopping_patience:
+                logger.info(f"Early stopping triggered at epoch {epoch+1}")
+                break
 
         # Final save
         self.save_model(prefix="final")
@@ -224,5 +230,5 @@ class KYNTrainer:
             wandb.save(f"{self.config.exp_uuid}_*.ep{self.config.epochs}")
 
     def save_model(self, prefix=""):
-        filename = f"{self.config.exp_uuid}{f'_{prefix}' if prefix else ''}.ep{self.config.epochs}"
+        filename = f"models/{self.config.exp_uuid}{f'_{prefix}' if prefix else ''}.ep{self.config.epochs}"
         torch.save(self.model.state_dict(), filename)
