@@ -51,6 +51,11 @@ def generate_dataset(args):
     )
 
     dataset.load_and_transform_graphs()
+    # Check if any function has multiple examples
+    from collections import Counter
+
+    label_counts = Counter(dataset.labels)
+    print("Examples per class:", label_counts.most_common(10))
     dataset.save_dataset(args.output_prefix)
     logger.info(f"Dataset saved with prefix: {args.output_prefix}")
 
@@ -60,8 +65,8 @@ def train_model(args, sweep=False):
     if sweep:
         # Get parameters from wandb.config during sweeps
         config = KYNConfig(
-            learning_rate=5e-4,
-            min_learning_rate=wandb.config.learning_rate,
+            learning_rate=wandb.config.learning_rate,
+            min_learning_rate=wandb.config.min_learning_rate,
             model_channels=wandb.config.hidden_channels,
             batch_size=wandb.config.batch_size,
             train_data=args.train_data,
@@ -72,6 +77,9 @@ def train_model(args, sweep=False):
             circle_loss_m=wandb.config.circle_loss_m,
             circle_loss_gamma=wandb.config.circle_loss_gamma,
             dropout_ratio=wandb.config.dropout_ratio,
+            early_stopping_patience=wandb.config.early_stopping_patience,
+            early_stopping_delta=wandb.config.early_stopping_delta,
+            epochs=wandb.config.epochs,
         )
     else:
         config = KYNConfig(
@@ -103,12 +111,11 @@ def train_model(args, sweep=False):
 
     trainer.train(validate_examples=args.validate_examples)
 
-    if not sweep:
-        trainer.save_model(prefix="final")
-        if trainer.log_to_wandb:
-            wandb.save(f"{trainer.config.exp_uuid}_*.ep{trainer.config.epochs}")
+    trainer.save_model(prefix="sweep")
+    if trainer.log_to_wandb:
+        wandb.save(f"{trainer.config.exp_uuid}_*.ep{trainer.config.epochs}")
 
-        logger.info(f"Model saved with UUID: {config.exp_uuid}")
+    logger.info(f"Model saved with UUID: {config.exp_uuid}")
 
 
 def evaluate_model(args):
@@ -253,15 +260,15 @@ def main():
         "--train-labels", required=True, help="Path to training labels pickle file"
     )
     train_parser.add_argument(
-        "--learning-rate", type=float, default=5e-4, help="Learning rate"
+        "--learning-rate", type=float, default=3e-5, help="Learning rate"
     )
     train_parser.add_argument(
-        "--model-channels", type=int, default=256, help="Number of model channels"
+        "--model-channels", type=int, default=512, help="Number of model channels"
     )
     train_parser.add_argument(
         "--feature-dim", type=int, default=6, help="Feature dimension"
     )
-    train_parser.add_argument("--batch-size", type=int, default=256, help="Batch size")
+    train_parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     train_parser.add_argument(
         "--device", default="cuda", help="Device to use (cuda, cpu, mps)"
     )
@@ -292,7 +299,7 @@ def main():
         "--model-name", required=True, help="Name of the model architecture"
     )
     eval_parser.add_argument(
-        "--model-channels", type=int, default=256, help="Number of model channels"
+        "--model-channels", type=int, default=512, help="Number of model channels"
     )
     eval_parser.add_argument(
         "--feature-dim", type=int, default=6, help="Feature dimension"
@@ -307,11 +314,11 @@ def main():
         "--search-pool-sizes",
         type=int,
         nargs="+",
-        default=[100],
+        default=[100, 250, 500, 1000],
         help="Search pool sizes",
     )
     eval_parser.add_argument(
-        "--num-search-pools", type=int, default=500, help="Number of search pools"
+        "--num-search-pools", type=int, default=1, help="Number of search pools"
     )
     eval_parser.add_argument(
         "--random-seed", type=int, default=1337, help="Random seed"

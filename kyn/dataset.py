@@ -7,9 +7,7 @@ from pathlib import Path
 import rustworkx as rx
 from rustworkx import PyDiGraph
 from tqdm import tqdm
-from torch_geometric.data import Data
-from typing import Optional, Union, List, Dict, Any, Literal
-from collections import defaultdict
+from collections import Counter
 
 from loguru import logger
 from GraphWithMetadata import GraphWithMetadata
@@ -78,6 +76,7 @@ class KYNDataset:
         self.labels = []
         self.graphs = []
         self.no_graphs_failed = 0
+        self.avg_examples_per_class = 0.0
 
     def _load_file_paths(self):
         """
@@ -181,6 +180,18 @@ class KYNDataset:
             except Exception as e:
                 print(f"Failed to load {file_path} - Exception: {e}")
                 self.no_graphs_failed += 1
+
+        label_counts = Counter(self.labels)
+        num_classes = len(label_counts)
+        total_examples = len(self.labels)
+
+        if num_classes > 0:
+            self.avg_examples_per_class = total_examples / num_classes
+        else:
+            self.avg_examples_per_class = 0.0  # Handle edge case
+
+        # Add logging for debugging
+        logger.info(f"Average examples per class: {self.avg_examples_per_class:.2f}")
 
         if self.target_sample_size is None:
             logger.info(

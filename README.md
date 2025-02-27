@@ -4,9 +4,9 @@ python cli.py vuln-evaluate --model-path e3e17252.ep350 --model-name
 
 python cli.py evaluate --model-path e3e17252.ep350 --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --dataset-path eu4 --eval-prefix eu4_eval --requires-edge-feats
 
-python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data 2arm_train-graphs.pickle --train-labels 2arm_train-labels.pickle --use-wandb --wandb-project eu4_project --test-data 2arm_test-graphs.pickle --test-labels 2arm_test-labels.pickle
+python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data datasets/4mac4lin_train-graphs.pickle --train-labels datasets/4mac4lin_train-labels.pickle --use-wandb --wandb-project eu4_project
 
-python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data datasets/4mac4lin_train-graphs.pickle --train-labels datasets/4mac4lin_train-labels.pickle --use-wandb --wandb-project eu4_project --test-data datasets/4mac_test-graphs.pickle --test-labels datasets/4mac_test-labels.pickle
+python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data datasets/mixed_train_140_000-graphs.pickle --train-labels datasets/mixed_train_140_000-labels.pickle --use-wandb --wandb-project eu4_project --test-data datasets/mixed_validation_60_000-graphs.pickle --test-labels datasets/mixed_validation_60_000-labels.pickle
 
 python cli.py sweep \
 --sweep-config sweep.yaml \

@@ -1,26 +1,54 @@
-program: cli.py
-method: bayes  # Options: grid, random, bayes
+method: bayes
 metric:
-  name: epoch/val_loss
-  goal: minimize
+  name: epoch/recall_at_1
+  goal: maximize
+
 parameters:
+  # Narrowed based on best performers (0.0001-0.00025 observed)
   learning_rate:
-    distribution: uniform
-    min: 1e-6
-    max: 1e-4
+    distribution: log_uniform_values
+    min: 1e-4  # Lower bound from successful runs
+    max: 1e-3  # Reduced from 1e-2 to avoid overshooting
+
+  # Adjusted to match best performers' decay patterns
+  min_learning_rate:
+    distribution: log_uniform_values
+    min: 1e-7
+    max: 1e-5  # Tighter range based on working configs
+
+  # Focus on stable batch sizes (64/1024 removed)
   batch_size:
-    values: [32, 64, 128, 256]
+    values: [512]  # Top performers used 128-256
+
+  # Reduced to avoid crashes while keeping performance
   hidden_channels:
-    values: [128, 256, 512]
-  circle_loss_m:
-    min: 0.1
-    max: 0.4
-    distribution: uniform
+    values: [256, 512]  # Remove 1024/2048 if causing issues
+
+  # Adjusted based on best gamma range (0.43-0.45)
   circle_loss_gamma:
-    values: [64, 128, 256, 512]
+    distribution: log_uniform_values
+    min: 10  # Min scaled to m=2
+    max: 500
+
+  # Narrowed m range from top performers (0.2-0.3 worked best)
+  circle_loss_m:
+    min: 0.20
+    max: 0.50
+    distribution: uniform
+
   dropout_ratio:
-    values: [0.3, 0.4, 0.5, 0.6, 0.7]
-  early_stopping_patience:
-    values: [25, 50, 75]
+    distribution: log_uniform_values
+    min: 0.1
+    max: 0.7  # <<< Critical
+
+  # Keep but let early stopping control actual training
+  epochs:
+    values: [400]  # Let early stopping terminate early
+
+  # Prioritize best observed values
   early_stopping_delta:
-    values: [0.001, 0.005, 0.01, 0.05]
+    values: [0.001, 0.005]  # Remove 0.01
+
+  # Focus on higher patience from successful runs
+  early_stopping_patience:
+    values: [45]  # Best performers used 45
