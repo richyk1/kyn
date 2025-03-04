@@ -10,20 +10,20 @@ BINARYCORP_TEST_DATA = os.path.join(TEST_DATA_ROOT, "binarycorp")
 
 def test_dataset_init():
     """Test dataset init with loading all data (i.e sample_size set to -1)"""
-    data = KYNDataset(CISCO_TEST_DATA, dataset_naming_convetion="cisco")
+    data = KYNDataset(CISCO_TEST_DATA, dataset_naming_convention="cisco")
 
     assert len(data.file_paths) == 28
     assert isinstance(data, KYNDataset)
     assert isinstance(data.labels, list)
     assert isinstance(data.graphs, list)
-    assert data.dataset_naming_convetion == "cisco"
+    assert data.dataset_naming_convention == "cisco"
 
 
 @pytest.mark.parametrize("sample_size, expected_size", [(10, 10), (20, 20), (1, 1)])
 def test_dataset_sample_size_defined(sample_size, expected_size):
     """Test dataset init with a sample size set"""
     data = KYNDataset(
-        CISCO_TEST_DATA, dataset_naming_convetion="cisco", sample_size=sample_size
+        CISCO_TEST_DATA, dataset_naming_convention="cisco", sample_size=sample_size
     )
     assert len(data.file_paths) == expected_size
 
@@ -31,21 +31,21 @@ def test_dataset_sample_size_defined(sample_size, expected_size):
 def test_dataset_init_empty_folder():
     """Test dataset init when the dataset folder provided is empty"""
     with pytest.raises(ValueError):
-        _ = KYNDataset("tests/no_data", dataset_naming_convetion="cisco")
+        _ = KYNDataset("tests/no_data", dataset_naming_convention="cisco")
 
 
 def test_dataset_init_incorrect_naming_convetion():
     """Test dataset init when an invalid dataset naming convetion is provided"""
     with pytest.raises(ValueError):
         _ = KYNDataset(
-            CISCO_TEST_DATA, dataset_naming_convetion="random", sample_size=10
+            CISCO_TEST_DATA, dataset_naming_convention="random", sample_size=10
         )
 
 
 def test_dataset_init_with_filter_string():
     """Test dataset init when a filter string is provided"""
     dataset = KYNDataset(
-        CISCO_TEST_DATA, dataset_naming_convetion="cisco", filter_strs=["_set_"]
+        CISCO_TEST_DATA, dataset_naming_convention="cisco", filter_strs=["_set_"]
     )
     assert len(dataset.file_paths) == 2
 
@@ -56,7 +56,7 @@ def test_dataset_init_with_filter_string():
 )
 def test_binary_func_id_extraction_cisco(idx, expected):
     """Test binary func id extraction when provided with a cisco style filepath"""
-    dataset = KYNDataset(CISCO_TEST_DATA, dataset_naming_convetion="cisco")
+    dataset = KYNDataset(CISCO_TEST_DATA, dataset_naming_convention="cisco")
     dataset.file_paths = sorted(dataset.file_paths)
 
     target = dataset.file_paths[idx]
@@ -69,7 +69,7 @@ def test_binary_func_id_extraction_cisco(idx, expected):
 )
 def test_binary_func_id_extraction_trex(idx, expected):
     """Test binary func id extraction when provided with a trex style filepath"""
-    dataset = KYNDataset(TREX_TEST_DATA, dataset_naming_convetion="trex")
+    dataset = KYNDataset(TREX_TEST_DATA, dataset_naming_convention="trex")
     dataset.file_paths = sorted(dataset.file_paths)
 
     target = dataset.file_paths[idx]
@@ -86,7 +86,7 @@ def test_binary_func_id_extraction_trex(idx, expected):
 )
 def test_binary_func_id_extraction_binarycorp(idx, expected):
     """Test binary func id extraction when provided with a binarycorp style filepath"""
-    dataset = KYNDataset(BINARYCORP_TEST_DATA, dataset_naming_convetion="binarycorp")
+    dataset = KYNDataset(BINARYCORP_TEST_DATA, dataset_naming_convention="binarycorp")
     dataset.file_paths = sorted(dataset.file_paths)
 
     target = dataset.file_paths[idx]

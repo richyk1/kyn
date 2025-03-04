@@ -45,7 +45,7 @@ class KYNTrainer:
 
         logger.info("Loading up train labels...")
         with open(config.train_labels, "rb") as fp:
-            self.labels = pickle.load(fp)
+            self.labels = np.array(pickle.load(fp))  # Convert to array
 
         self.loss_func = CircleLoss(
             m=config.circle_loss_m, gamma=config.circle_loss_gamma
@@ -80,7 +80,7 @@ class KYNTrainer:
 
             logger.info("Loading validation labels...")
             with open(config.test_labels, "rb") as fp:
-                self.val_labels = pickle.load(fp)
+                self.val_labels = np.array(pickle.load(fp))  # Convert to array
 
             # Create validation DataLoader
             self.val_dataloader = DataLoader(
@@ -102,48 +102,49 @@ class KYNTrainer:
         model.to(self.device)
 
     def _validate(self):
-        # Split into query and index sets (adjust ratio as needed)
-        split_ratio = 0.5
-        split_idx = int(len(self.val_graphs) * split_ratio)
-        query_graphs = self.val_graphs[:split_idx]
-        index_graphs = self.val_graphs[split_idx:]
+        # Shuffle validation data and labels together
+        num_val = len(self.val_graphs)
+        indices = np.random.permutation(num_val)  # Random shuffle
+        shuffled_graphs = [self.val_graphs[i] for i in indices]
+        shuffled_labels = self.val_labels[indices]  # Use pre-loaded test labels
 
-        # Generate embeddings for both sets
-        query_embeds, query_labels = self._get_embeddings(query_graphs)
-        index_embeds, index_labels = self._get_embeddings(index_graphs)
+        # Split into query/index (adjust ratio as needed)
+        split_ratio = 0.01
+        split_idx = int(num_val * split_ratio)
+        query_graphs = shuffled_graphs[:split_idx]
+        index_graphs = shuffled_graphs[split_idx:]
+        query_labels = shuffled_labels[:split_idx]
+        index_labels = shuffled_labels[split_idx:]
 
-        # --- Calculate Validation Loss ---
-        # Compare query embeddings to index embeddings with the same label
+        # Generate embeddings (ignore labels from data)
+        query_embeds, _ = self._get_embeddings(query_graphs)
+        index_embeds, _ = self._get_embeddings(index_graphs)
+
+        # Calculate validation loss (now uses shuffled labels)
         val_losses = []
         self.model.eval()
         with torch.no_grad():
-            # Compute distances between matching pairs
             for query_embed, query_label in zip(query_embeds, query_labels):
-                # Find all index embeddings with the same label
                 same_label_idx = index_labels == query_label
                 if np.any(same_label_idx):
                     positive_dists = np.linalg.norm(
                         index_embeds[same_label_idx] - query_embed, axis=1
                     )
-                    val_loss = np.mean(
-                        positive_dists
-                    )  # Loss ~ mean distance to positives
+                    val_loss = np.mean(positive_dists)
                     val_losses.append(val_loss)
 
-        avg_val_loss = (
-            np.mean(val_losses) if val_losses else 0.0
-        )  # Default to 0 if no positives
+        avg_val_loss = np.mean(val_losses) if val_losses else 0.0
 
-        # Build FAISS index and compute recall@1 (unchanged)
+        # FAISS recall@1 with correct labels
         index = faiss.IndexFlatIP(index_embeds.shape[1])
-        faiss.normalize_L2(index_embeds)  # Normalize before adding
+        faiss.normalize_L2(index_embeds)
         index.add(index_embeds)
-        D, I = index.search(query_embeds, 1)  # Top-1 match from index set
+        D, I = index.search(query_embeds, 1)
         matches = index_labels[I.flatten()]
         recall_at_1 = (matches == query_labels).mean()
 
         return {
-            "val_loss": avg_val_loss,  # Now a numeric value (float)
+            "val_loss": avg_val_loss,
             "recall_at_1": recall_at_1,
         }
 

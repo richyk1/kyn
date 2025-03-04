@@ -1,24 +1,31 @@
 notes
 ```
-python cli.py vuln-evaluate --model-path e3e17252.ep350 --model-name
-
-python cli.py evaluate --model-path e3e17252.ep350 --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --dataset-path eu4 --eval-prefix eu4_eval --requires-edge-feats
-
-python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data datasets/4mac4lin_train-graphs.pickle --train-labels datasets/4mac4lin_train-labels.pickle --use-wandb --wandb-project eu4_project
-
-python cli.py train --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --train-data datasets/mixed_train_140_000-graphs.pickle --train-labels datasets/mixed_train_140_000-labels.pickle --use-wandb --wandb-project eu4_project --test-data datasets/mixed_validation_60_000-graphs.pickle --test-labels datasets/mixed_validation_60_000-labels.pickle
-
 python cli.py sweep \
 --sweep-config sweep.yaml \
 --count 50 \
 --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge \
---train-data datasets/4mac4lin_train-graphs.pickle \
---train-labels datasets/4mac4lin_train-labels.pickle \
---test-data datasets/4mac_test-graphs.pickle \
---test-labels datasets/4mac_test-labels.pickle \
---wandb-project eu4_project
-```
+--train-data datasets/mixed_train_maclin_120_000-graphs.pickle \
+--train-labels datasets/mixed_train_maclin_120_000-labels.pickle \
+--test-data datasets/mixed_test_60_000-graphs.pickle \
+--test-labels datasets/mixed_test_60_000-labels.pickle
 
+python cli.py generate --root-data-path ~/dev/edges/train_cgn --     dataset-type custom --with-edge-features --output-prefix datasets/mixed_train_500_000
+
+opython cli.py train --model-name GraphConvInstanceGlobalMaxSmall     SoftMaxAggrEdge --train-data datasets/mixed_train_400_000-graphs.pickle --train-labels datasets/mixed_train_400_000-labels.pickle --use-wandb --wandb-project eu4_project --test-data datasets/mixed_test_60_000-graphs.pickle --test-labels datasets/mixed_test_60_000-labels r-25.pickle
+
+python cli.py evaluate --model-path models/d04f5132.ep300 --mode     l-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --dataset-path datasets/mixed_test_60_000 --eval-prefix eu4_400_000 --requires-edge-feats --model-channels 256 --search-pool-sizes 100 1000 10000 --num-search-pools 1000 --eval-prefix win_mac   
+
+
+python cli.py train \
+--model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge \
+--train-data datasets/mixed_train_maclin_120_000-graphs.pickle \
+--train-labels datasets/mixed_train_maclin_120_000-labels.pickle \
+--test-data datasets/mixed_test_60_000-graphs.pickle \
+--test-labels datasets/mixed_test_60_000-labels.pickle
+--use-wandb \
+--wandb-project eu4_project \
+
+```
 
 # Know your neighborhood (KYN)
 

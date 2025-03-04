@@ -18,14 +18,16 @@ class KYNDataset:
     def __init__(
         self,
         root_data_path: str,
-        dataset_naming_convetion: str,
+        dataset_naming_convention: str,
         filter_strs: list[str] = [],
         sample_size: int = -1,
         exclude: bool = False,
         with_edge_features: bool = True,
+        min_examples_per_class: int = 2,
     ):
         logger.info("Starting KYN dataset init")
         self.root_data_path = root_data_path
+        self.min_examples_per_class = min_examples_per_class
 
         logger.info(f"Scanning {self.root_data_path} for filepaths")
         self.file_paths = self._load_file_paths()
@@ -40,6 +42,31 @@ class KYNDataset:
             self.file_paths = self._filter(exclude)
             self.dataset_len = len(self.file_paths)
             logger.info(f"Filtering complete. Remaining files: {self.dataset_len}")
+
+        if dataset_naming_convention not in [
+            "cisco",
+            "binkit",
+            "trex",
+            "binarycorp",
+            "custom",
+        ]:
+            raise ValueError(
+                "The dataset naming convetion only has four options - 'cisco', 'binkit', 'trex' or 'binarycorp'"
+            )
+        else:
+            self.dataset_naming_convention = dataset_naming_convention
+
+        self.with_edge_features = with_edge_features
+        self.binary_func_id_index = []
+        self.labels = []
+        self.graphs = []
+        self.no_graphs_failed = 0
+        self.avg_examples_per_class = 0.0
+
+        self.binary_function_ids = [
+            self.get_binary_func_id(fp) for fp in self.file_paths
+        ]
+        self.id_counts = Counter(self.binary_function_ids)
 
         if sample_size:
             if sample_size != -1:
@@ -58,25 +85,14 @@ class KYNDataset:
             self.dataset_len = len(self.file_paths)
             logger.info(f"Remaining files: {self.dataset_len}")
 
-        if dataset_naming_convetion not in [
-            "cisco",
-            "binkit",
-            "trex",
-            "binarycorp",
-            "custom",
-        ]:
-            raise ValueError(
-                "The dataset naming convetion only has four options - 'cisco', 'binkit', 'trex' or 'binarycorp'"
-            )
-        else:
-            self.dataset_naming_convetion = dataset_naming_convetion
-
-        self.with_edge_features = with_edge_features
-        self.binary_func_id_index = []
-        self.labels = []
-        self.graphs = []
-        self.no_graphs_failed = 0
-        self.avg_examples_per_class = 0.0
+        self.binary_function_ids = [
+            self.get_binary_func_id(fp) for fp in self.file_paths
+        ]
+        self.id_counts = Counter(self.binary_function_ids)
+        valid_ids = {id_ for id_, count in self.id_counts.items() if count >= 2}
+        self.file_paths = [
+            fp for fp in self.file_paths if self.get_binary_func_id(fp) in valid_ids
+        ]
 
     def _load_file_paths(self):
         """
@@ -99,7 +115,16 @@ class KYNDataset:
             )
 
         if self.sample_size != -1:
-            return random.choices(self.file_paths, k=self.sample_size)
+            # Get frequency-based weights [functions appearing in more binaries get higher weight]
+            weights = [self.id_counts[id] for id in self.binary_function_ids]
+
+            # Normalize weights and sample
+            total_weight = sum(weights)
+            normalized_weights = [w / total_weight for w in weights]
+
+            return random.choices(
+                self.file_paths, weights=normalized_weights, k=self.sample_size
+            )
         else:
             self.sample_size = len(self.file_paths)
             return self.file_paths
@@ -119,8 +144,10 @@ class KYNDataset:
             ]
 
     def load_and_transform_graphs(self):
+        sampled_id_counts = Counter()
         for file_path in tqdm(self.file_paths):
             binary_function_id = self.get_binary_func_id(file_path)
+            sampled_id_counts[binary_function_id] += 1
 
             if binary_function_id not in self.binary_func_id_index:
                 self.binary_func_id_index.append(binary_function_id)
@@ -181,17 +208,9 @@ class KYNDataset:
                 print(f"Failed to load {file_path} - Exception: {e}")
                 self.no_graphs_failed += 1
 
-        label_counts = Counter(self.labels)
-        num_classes = len(label_counts)
-        total_examples = len(self.labels)
-
-        if num_classes > 0:
-            self.avg_examples_per_class = total_examples / num_classes
-        else:
-            self.avg_examples_per_class = 0.0  # Handle edge case
-
-        # Add logging for debugging
-        logger.info(f"Average examples per class: {self.avg_examples_per_class:.2f}")
+        # Top 10 least common for debugging
+        top_10 = sampled_id_counts.most_common()[-10:]
+        logger.info(f"Least sampled functions: {top_10}")
 
         if self.target_sample_size is None:
             logger.info(
@@ -228,13 +247,13 @@ class KYNDataset:
         return G
 
     def get_binary_func_id(self, file_path: str) -> str:
-        if self.dataset_naming_convetion == "binkit":
+        if self.dataset_naming_convention == "binkit":
             return self.get_binkit_binary_func_id(file_path)
-        elif self.dataset_naming_convetion == "binarycorp":
+        elif self.dataset_naming_convention == "binarycorp":
             return self.get_binarycorp_binary_func_id(file_path)
-        elif self.dataset_naming_convetion == "trex":
+        elif self.dataset_naming_convention == "trex":
             return self.get_trex_binary_func_id(file_path)
-        elif self.dataset_naming_convetion == "custom":
+        elif self.dataset_naming_convention == "custom":
             return self.get_custom_binary_func_id(file_path)
         else:
             return self.get_cisco_talos_binary_func_id(file_path)

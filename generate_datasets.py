@@ -21,7 +21,7 @@ if CISCO_DATASET_1_DATA_RAW is not None:
     logger.info("Starting to process Cisco Dataset 1")
     dataset = KYNDataset(
         root_data_path=CISCO_DATASET_1_DATA_RAW,
-        dataset_naming_convetion="cisco",
+        dataset_naming_convention="cisco",
         filter_strs=["nmap", "z3", "nping", "ncat"],
         exclude=True,
         sample_size=256625,
@@ -32,7 +32,7 @@ if CISCO_DATASET_1_DATA_RAW is not None:
 
     dataset = KYNDataset(
         root_data_path=CISCO_DATASET_1_DATA_RAW,
-        dataset_naming_convetion="cisco",
+        dataset_naming_convention="cisco",
         filter_strs=["nmap", "z3", "nping", "ncat"],
         sample_size=522003,
     )
@@ -47,7 +47,7 @@ if CISCO_DATASET_2_DATA_RAW is not None:
     logger.info("Starting to process Cisco Dataset 2")
     dataset = KYNDataset(
         root_data_path=CISCO_DATASET_2_DATA_RAW,
-        dataset_naming_convetion="trex",
+        dataset_naming_convention="trex",
     )
 
     dataset.load_and_transform_graphs()
@@ -61,7 +61,7 @@ if BINKIT_NOINLINE_DATA_RAW is not None:
     dataset = KYNDataset(
         root_data_path=BINKIT_NOINLINE_DATA_RAW,
         sample_size=1000000,
-        dataset_naming_convetion="binkit",
+        dataset_naming_convention="binkit",
     )
 
     dataset.load_and_transform_graphs()
@@ -74,7 +74,7 @@ if BINKIT_NORMAL_DATA_RAW is not None:
     dataset = KYNDataset(
         root_data_path=BINKIT_NORMAL_DATA_RAW,
         sample_size=1000000,
-        dataset_naming_convetion="binkit",
+        dataset_naming_convention="binkit",
     )
 
     dataset.load_and_transform_graphs()
@@ -86,7 +86,7 @@ else:
 if BINARYCORP_DATA_RAW is not None:
     logger.info("Starting to process BinaryCorp (No duplicates)")
     dataset = KYNDataset(
-        root_data_path=BINARYCORP_DATA_RAW, dataset_naming_convetion="binarycorp"
+        root_data_path=BINARYCORP_DATA_RAW, dataset_naming_convention="binarycorp"
     )
 
     dataset.load_and_transform_graphs()
@@ -97,7 +97,7 @@ else:
 if BINARYCORP_WITH_DUPS_RAW is not None:
     logger.info("Starting to process BinaryCorp (with duplicates")
     dataset = KYNDataset(
-        root_data_path=BINARYCORP_WITH_DUPS_RAW, dataset_naming_convetion="binarycorp"
+        root_data_path=BINARYCORP_WITH_DUPS_RAW, dataset_naming_convention="binarycorp"
     )
 
     dataset.load_and_transform_graphs()

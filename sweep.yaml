@@ -7,18 +7,18 @@ parameters:
   # Narrowed based on best performers (0.0001-0.00025 observed)
   learning_rate:
     distribution: log_uniform_values
-    min: 1e-4  # Lower bound from successful runs
-    max: 1e-3  # Reduced from 1e-2 to avoid overshooting
+    min: 5e-4  # Lower bound from successful runs
+    max: 5e-3  # Reduced from 1e-2 to avoid overshooting
 
   # Adjusted to match best performers' decay patterns
   min_learning_rate:
     distribution: log_uniform_values
-    min: 1e-7
-    max: 1e-5  # Tighter range based on working configs
+    min: 5e-5
+    max: 1e-4  # Tighter range based on working configs
 
   # Focus on stable batch sizes (64/1024 removed)
   batch_size:
-    values: [512]  # Top performers used 128-256
+    values: [256, 512]  # Top performers used 128-256
 
   # Reduced to avoid crashes while keeping performance
   hidden_channels:
@@ -26,29 +26,18 @@ parameters:
 
   # Adjusted based on best gamma range (0.43-0.45)
   circle_loss_gamma:
-    distribution: log_uniform_values
-    min: 10  # Min scaled to m=2
-    max: 500
+    values: [256, 512]
 
   # Narrowed m range from top performers (0.2-0.3 worked best)
   circle_loss_m:
     min: 0.20
-    max: 0.50
+    max: 0.60
     distribution: uniform
-
-  dropout_ratio:
-    distribution: log_uniform_values
-    min: 0.1
-    max: 0.7  # <<< Critical
 
   # Keep but let early stopping control actual training
   epochs:
-    values: [400]  # Let early stopping terminate early
-
-  # Prioritize best observed values
-  early_stopping_delta:
-    values: [0.001, 0.005]  # Remove 0.01
+    values: [300]
 
   # Focus on higher patience from successful runs
   early_stopping_patience:
-    values: [45]  # Best performers used 45
+    values: [25]  # Best performers used 45
