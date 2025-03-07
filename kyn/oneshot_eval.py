@@ -1,26 +1,17 @@
-import json
 import os
-import pickle
-import random
 import torch
-from collections import Counter
 from pathlib import Path
-from typing import Union
 
 import orjson
 import rustworkx as rx
 import torch
-import torch.nn as nn
 from from_rustworkx import from_rustworkx
 from GraphWithMetadata import GraphWithMetadata
 from kyn.config import KYNConfig
 from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
-from kyn.utils import validate_device
 from loguru import logger
-from torch_geometric.data import Data
-from torchmetrics.retrieval import RetrievalMRR, RetrievalNormalizedDCG, RetrievalRecall
 from tqdm import tqdm
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Batch
 from kyn.networks import GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge
 
 
@@ -206,26 +197,6 @@ class CosineSimilarityEvaluator:
         similarity_scores = list(zip(sim_scores, all_filenames))
         similarity_scores.sort(key=lambda x: x[0], reverse=True)
 
-        # 6) Optionally find the rank of the "actual" function
-        target_filename = os.path.basename(target_file)
-        # TODO: Edit!!!
-        target_filename = "CCountry::SetArmyTradition_subgraph.json"
-        actual_rank = next(
-            (
-                i + 1
-                for i, (_, fname) in enumerate(similarity_scores)
-                if fname == target_filename
-            ),
-            None,
-        )
-        if actual_rank:
-            print(
-                f"Actual function '{target_filename}' is ranked "
-                f"at position {actual_rank} out of {len(similarity_scores)}."
-            )
-        else:
-            print(f"Actual function '{target_filename}' not found in the ranking.")
-
         return similarity_scores[:top_k]
 
 
@@ -233,8 +204,6 @@ def get_model(model_name: str, config: KYNConfig) -> torch.nn.Module:
     """Get the appropriate model based on the model name."""
     models = {
         "GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge": GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge,
-        # "GraphConvGraphNormGlobalMaxSmallSoftMaxAggrEdge": GraphConvGraphNormGlobalMaxSmallSoftMaxAggrEdge,
-        # "GraphConvLayerNormGlobalMaxSmallSoftMaxAggrEdge": GraphConvLayerNormGlobalMaxSmallSoftMaxAggrEdge,
     }
 
     if model_name not in models:
@@ -250,38 +219,14 @@ def get_model(model_name: str, config: KYNConfig) -> torch.nn.Module:
 if __name__ == "__main__":
     """Generate and save a dataset."""
 
-    # python cli.py evaluate --model-path models/eb7f7a5f_sweep.ep300 --model-name GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge --dataset-path datasets/mixed_validation_30_000 --eval-prefix eu4_140_000 --requires-edge-feats
-
-    # """Evaluate a trained model."""
-    # model = get_model(
-    #     "GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge",
-    #     KYNConfig(),
-    # )
-    # model.load_state_dict(torch.load("models/eb7f7a5f_sweep.ep300"))
-
-    # evaluator = KYNEvaluator(
-    #     model=model,
-    #     model_name="GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge",
-    #     dataset_path="datasets/mixed_validation_lin_mac",
-    #     eval_prefix="eu4_140_000",
-    #     search_pool_size=[1000, 2500, 5000, 10000],
-    #     num_search_pools=5,
-    #     random_seed=1337,
-    #     requires_edge_feats=True,
-    # )
-
-    # evaluator.evaluate()
-
-    MODEL_PATH = "./models/d04f5132.ep300"
+    MODEL_PATH = "./models/baf95786.ep1200"
     model = GraphConvInstanceGlobalMaxSmallSoftMaxAggrEdge(256, 6)
-    model.load_state_dict(torch.load(MODEL_PATH))
+    model.load_state_dict(torch.load(MODEL_PATH, weights_only=True))
 
     evaluator = CosineSimilarityEvaluator(model=model, device="cuda")
 
-    target_file = (
-        "/home/prime/dev/edges/test_cgn/eu4_win_1.37.2/140463910_subgraph.json"
-    )
-    search_folder = "/home/prime/dev/edges/test_cgn/eu4_mac_1.37.2/"
+    target_file = "/home/prime/dev/edges/test_cgn/eu4_mac_1.37.2/CCountry::SetArmyTradition_subgraph.json"
+    search_folder = "/home/prime/dev/edges/test_cgn/eu4_win_1.37.2/"
 
     top_k_results = evaluator.compare_one_to_many(
         target_file=target_file, search_dir=search_folder, top_k=5, max_files=-1

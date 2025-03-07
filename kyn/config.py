@@ -13,11 +13,11 @@ class KYNConfig:
     train_labels: str = "datasets/dummy/binkit-test-new-class-small-labels.pickle"
     test_data: str = ""
     test_labels: str = ""
-    epochs: int = 300
+    epochs: int = 1200
     loss: str = "Circle"
     miner: str = "BatchHard"
     optim: str = "Adam"
-    batch_size: int = 256
+    batch_size: int = 1024
     model_channels: int = 256
     pooling: str = "max"
     circle_loss_m: float = 0.25
@@ -30,7 +30,7 @@ class KYNConfig:
     with_edges: bool = True
     sampler_epoch_size: int = 0
     early_stopping_patience: int = (
-        300  # Number of epochs to wait, set to 50 on big build
+        1200  # Number of epochs to wait, set to 50 on big build
     )
     early_stopping_delta: float = 0.0001  # Minimum improvement threshold
 
